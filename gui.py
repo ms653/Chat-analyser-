@@ -25,6 +25,8 @@ import analyser  # noqa: E402  (must come after path fix)
 
 # Saved config lives in home dir so it persists between runs
 CONFIG_FILE = Path.home() / ".whatsapp_analyser_config.json"
+# Notes saved separately so they survive HTML regeneration
+NOTES_FILE  = Path.home() / ".whatsapp_analyser_notes.json"
 
 # ── Back-button toolbar injected into results HTML ───────────────────────────
 _TOOLBAR = (
@@ -85,6 +87,28 @@ class AnalyserAPI:
             CONFIG_FILE.write_text(json.dumps(config, indent=2))
         except Exception as e:
             print(f"[WARN] Config save failed: {e}")
+
+    # ── Notes persistence (disk) ─────────────────────────────────────────────
+    # Called from JS in the results HTML so notes survive browser storage resets
+    # and HTML regenerations. Keyed by noteKey(chatId, date) strings.
+
+    def save_note(self, key: str, value: str):
+        try:
+            notes = {}
+            if NOTES_FILE.exists():
+                notes = json.loads(NOTES_FILE.read_text())
+            notes[key] = value
+            NOTES_FILE.write_text(json.dumps(notes, indent=2))
+        except Exception as e:
+            print(f"[WARN] Note save failed: {e}")
+
+    def load_notes(self):
+        try:
+            if NOTES_FILE.exists():
+                return json.loads(NOTES_FILE.read_text())
+        except Exception:
+            pass
+        return {}
 
     # ── Navigation ───────────────────────────────────────────────────────────
 

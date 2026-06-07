@@ -1038,6 +1038,9 @@ a{{color:var(--contact)}}
 .crisis-content{{display:none}}
 .crisis-safe{{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--radius);padding:14px;font-size:14px;margin-top:16px}}
 .no-data{{color:var(--muted);font-size:14px;text-align:center;padding:32px}}
+.notes-toolbar{{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;box-shadow:var(--shadow)}}
+.btn-note-action{{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;color:var(--text)}}
+.btn-note-action:hover{{background:var(--contact);color:#fff;border-color:var(--contact)}}
 .note-section{{margin-top:16px;border-top:2px dashed #e2e8f0;padding-top:12px}}
 .note-label{{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px}}
 textarea.note{{width:100%;border:2px dashed #d1d5db;border-radius:var(--radius);padding:10px 12px;font-size:13px;resize:vertical;min-height:80px;background:#fefce8;color:var(--text);font-family:inherit;line-height:1.6;transition:border-color .15s,background .15s;outline:none}}
@@ -1109,13 +1112,63 @@ function badge(intent) {{
   return cls ? `<span class="badge ${{cls}}">${{labels[intent]||intent}}</span>` : "";
 }}
 
-// ── Save/load notes (localStorage) ──────────────────────────────────────────
+// ── Note persistence ─────────────────────────────────────────────────────────
+// Primary: localStorage (works for standalone HTML in any browser)
+// Secondary: pywebview API (writes to ~/.whatsapp_analyser_notes.json when
+//            running inside the desktop app, survives HTML regeneration)
 function noteKey(chatId, date) {{ return `note_${{chatId}}_${{date}}`; }}
-function saveNote(chatId, date, val) {{ localStorage.setItem(noteKey(chatId,date),val); }}
-function loadNote(chatId, date) {{ return localStorage.getItem(noteKey(chatId,date))||""; }}
+
+function saveNote(chatId, date, val) {{
+  const key = noteKey(chatId, date);
+  localStorage.setItem(key, val);
+  if(typeof pywebview !== 'undefined' && pywebview.api && pywebview.api.save_note)
+    pywebview.api.save_note(key, val).catch(()=>{{}});
+}}
+function loadNote(chatId, date) {{
+  return localStorage.getItem(noteKey(chatId, date)) || "";
+}}
+
 function personEditKey(name) {{ return `person_edit_${{name}}`; }}
-function savePersonEdit(name, val) {{ localStorage.setItem(personEditKey(name),val); }}
-function loadPersonEdit(name) {{ return localStorage.getItem(personEditKey(name))||""; }}
+function savePersonEdit(name, val) {{
+  localStorage.setItem(personEditKey(name), val);
+  if(typeof pywebview !== 'undefined' && pywebview.api && pywebview.api.save_note)
+    pywebview.api.save_note(personEditKey(name), val).catch(()=>{{}});
+}}
+function loadPersonEdit(name) {{ return localStorage.getItem(personEditKey(name)) || ""; }}
+
+function exportNotes() {{
+  const out = {{}};
+  for(let i = 0; i < localStorage.length; i++) {{
+    const k = localStorage.key(i);
+    if(k && (k.startsWith('note_') || k.startsWith('person_edit_')))
+      out[k] = localStorage.getItem(k);
+  }}
+  if(!Object.keys(out).length) {{ alert('No notes saved yet.'); return; }}
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], {{type:'application/json'}}));
+  a.download = 'whatsapp_analyser_notes.json';
+  a.click();
+}}
+function importNotes() {{
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.json';
+  inp.onchange = e => {{
+    const reader = new FileReader();
+    reader.onload = ev => {{
+      try {{
+        const notes = JSON.parse(ev.target.result);
+        Object.entries(notes).forEach(([k,v]) => {{
+          localStorage.setItem(k, v);
+          if(typeof pywebview !== 'undefined' && pywebview.api && pywebview.api.save_note)
+            pywebview.api.save_note(k, v).catch(()=>{{}});
+        }});
+        renderMain();
+      }} catch(err) {{ alert('Could not read notes file: ' + err.message); }}
+    }};
+    reader.readAsText(e.target.files[0]);
+  }};
+  inp.click();
+}}
 
 // ── Chart helpers ─────────────────────────────────────────────────────────
 function destroyChart(id) {{
@@ -1154,6 +1207,35 @@ function makeBarChart(canvasId, labels, datasets, opts) {{
       }}
     }}
   }});
+}}
+
+// ── Sentiment helpers ─────────────────────────────────────────────────────
+function dateToIsoWeek(dateStr) {{
+  var d = new Date(dateStr + 'T00:00:00');
+  var day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  var y = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return d.getUTCFullYear() + '-W' + String(Math.ceil(((d - y) / 86400000 + 1) / 7)).padStart(2, '0');
+}}
+// Weekly average of abs(score) — "how emotionally charged was this week?"
+function absWeekly(dailySeries) {{
+  var wm = {{}};
+  Object.entries(dailySeries).forEach(function(kv) {{
+    var w = dateToIsoWeek(kv[0]);
+    if(!wm[w]) wm[w] = [];
+    wm[w].push(Math.abs(kv[1]));
+  }});
+  var weeks = Object.keys(wm).sort();
+  return {{ weeks: weeks, vals: weeks.map(function(w) {{ return wm[w].reduce(function(a,b){{return a+b;}},0) / wm[w].length; }}) }};
+}}
+// Daily difference: user score minus contact score
+// Positive = you were more positive than them; negative = they were more positive
+function dailyDiff(userSeries, contactSeries) {{
+  var diff = {{}};
+  Object.keys(userSeries).forEach(function(d) {{
+    if(contactSeries[d] !== undefined) diff[d] = userSeries[d] - contactSeries[d];
+  }});
+  return diff;
 }}
 
 // ── Chat data helpers ────────────────────────────────────────────────────
@@ -1331,6 +1413,14 @@ function renderConversationsPanel(el) {{
 // ── Timeline ──────────────────────────────────────────────────────────────
 function renderTimeline(el, chat) {{
   const msgs=chat.messages_for_timeline;
+  // Notes toolbar — always visible at top of timeline
+  el.innerHTML=`<div class="notes-toolbar">
+    <span style="font-size:12px;color:var(--muted)">📝 Notes are saved in your browser. Back them up to keep them safe.</span>
+    <div style="display:flex;gap:8px">
+      <button class="btn-note-action" onclick="exportNotes()">⬇ Export notes</button>
+      <button class="btn-note-action" onclick="importNotes()">⬆ Import notes</button>
+    </div>
+  </div>`;
   // Group by date
   const byDate={{}};
   msgs.forEach(m=>{{if(m.date){{(byDate[m.date]||(byDate[m.date]=[])).push(m);}} }});
@@ -1355,7 +1445,7 @@ function renderTimeline(el, chat) {{
     html+=`</div>`;
   }});
   html+=`</div>`;
-  el.innerHTML=html;
+  el.innerHTML += html;
 }}
 
 function renderMergedTimeline(el) {{
@@ -1504,6 +1594,90 @@ function renderSentimentChart(el, chats) {{
     return i%step===0?w:"";
   }});
   requestAnimationFrame(()=>makeBarChart("volChart",volLabels,volDatasets));
+
+  // ── Intensity chart ──────────────────────────────────────────────────────
+  // "How emotionally charged were messages, regardless of positive/negative?"
+  var intCard=document.createElement('div'); intCard.className='card';
+  intCard.innerHTML=`<h2>Emotional intensity</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px">
+      How strongly felt messages are each week — regardless of whether positive or negative.
+      0 = completely neutral tone. 1 = maximum intensity. Useful for spotting periods of
+      high emotional charge even when sentiment score is mixed.
+    </p>
+    <div class="chart-wrap-sm"><canvas id="intChart"></canvas></div>`;
+  el.appendChild(intCard);
+  const intDatasets=[];
+  chats.forEach((chat,i)=>{{
+    const uInt=absWeekly(chat.daily_sentiment.user||{{}});
+    const cInt=absWeekly(chat.daily_sentiment.contact||{{}});
+    const allIntWeeks=[...new Set([...uInt.weeks,...cInt.weeks])].sort();
+    const uMap={{}}, cMap={{}};
+    uInt.weeks.forEach((w,j)=>uMap[w]=uInt.vals[j]);
+    cInt.weeks.forEach((w,j)=>cMap[w]=cInt.vals[j]);
+    const lbl=chats.length>1?chat.name:"";
+    intDatasets.push({{
+      label:lbl?`You (${{lbl}})`:"You",
+      data:allIntWeeks.map(w=>uMap[w]??null),
+      borderColor:colors[i%colors.length],backgroundColor:colors[i%colors.length]+"22",
+      borderWidth:2,pointRadius:1,spanGaps:true,tension:.3
+    }});
+    intDatasets.push({{
+      label:lbl?chat.name:chat.name,
+      data:allIntWeeks.map(w=>cMap[w]??null),
+      borderColor:colorsDash[i%colorsDash.length],backgroundColor:"transparent",
+      borderWidth:2,borderDash:[4,4],pointRadius:1,spanGaps:true,tension:.3
+    }});
+    // Re-use allIntWeeks for x-axis (use first chat's since all should be similar)
+    if(i===0) requestAnimationFrame(function(){{
+      destroyChart("intChart");
+      var ctx=document.getElementById("intChart"); if(!ctx) return;
+      charts["intChart"]=new Chart(ctx,{{type:"line",data:{{labels:allIntWeeks,datasets:intDatasets}},
+        options:{{responsive:true,maintainAspectRatio:false,
+          plugins:{{legend:{{position:"top"}}}},
+          scales:{{x:{{ticks:{{maxTicksLimit:14,maxRotation:45}}}},y:{{min:0,max:1,ticks:{{stepSize:0.25}}}}}}}}}});
+    }});
+  }});
+
+  // ── Divergence chart ─────────────────────────────────────────────────────
+  // "On the same day, how differently are you and the contact feeling?"
+  var divCard=document.createElement('div'); divCard.className='card';
+  divCard.innerHTML=`<h2>Sentiment gap — you vs them</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px">
+      Your mood score minus theirs, on days where both sent messages.
+      <b>Above 0</b>: you were more positive than them.
+      <b>Below 0</b>: they were more positive than you.
+      Large persistent gaps can signal disconnection or one-sided emotional labour.
+    </p>
+    <div class="chart-wrap-sm"><canvas id="divChart"></canvas></div>`;
+  el.appendChild(divCard);
+  const divDatasets=[];
+  const divColors=["#7c3aed","#0891b2","#be185d","#b45309"];
+  chats.forEach((chat,i)=>{{
+    const diff=dailyDiff(chat.daily_sentiment.user||{{}},chat.daily_sentiment.contact||{{}});
+    const avgDiff=rollingAvg(diff,7);
+    const diffDates=Object.keys(avgDiff).sort();
+    const lbl=chats.length>1?chat.name:"";
+    divDatasets.push({{
+      label:lbl||"Divergence",
+      data:diffDates.map(d=>avgDiff[d]??null),
+      borderColor:divColors[i%divColors.length],
+      backgroundColor:function(ctx2){{
+        const v=ctx2.raw; return v==null?"transparent":v>=0?"rgba(16,185,129,.15)":"rgba(239,68,68,.15)";
+      }},
+      borderWidth:2,pointRadius:1,spanGaps:true,tension:.3,fill:true
+    }});
+    if(i===0) requestAnimationFrame(function(){{
+      destroyChart("divChart");
+      var ctx=document.getElementById("divChart"); if(!ctx) return;
+      charts["divChart"]=new Chart(ctx,{{type:"line",data:{{labels:diffDates,datasets:divDatasets}},
+        options:{{responsive:true,maintainAspectRatio:false,
+          plugins:{{legend:{{position:"top"}}}},
+          scales:{{
+            x:{{ticks:{{maxTicksLimit:14,maxRotation:45}}}},
+            y:{{min:-1,max:1,ticks:{{stepSize:0.5}},
+              grid:{{color:function(ctx3){{return ctx3.tick.value===0?"#94a3b8":"#e2e8f0";}}}}}}}}}}}});
+    }});
+  }});
 }}
 
 // ── Initiation balance ─────────────────────────────────────────────────────
@@ -1666,6 +1840,19 @@ function renderNarrative(el, chat) {{
   html+=`</div>`;
   el.innerHTML=html;
 }}
+
+// ── Load notes from pywebview disk storage (desktop app only) ─────────────
+// In a browser, pywebview is undefined so this never fires.
+// In the desktop app, this syncs the disk notes.json into localStorage
+// before the first render, so persisted notes appear immediately.
+window.addEventListener('pywebviewready', function() {{
+  if(typeof pywebview === 'undefined' || !pywebview.api || !pywebview.api.load_notes) return;
+  pywebview.api.load_notes().then(function(notes) {{
+    if(!notes) return;
+    Object.entries(notes).forEach(function(kv) {{ localStorage.setItem(kv[0], kv[1]); }});
+    renderMain();
+  }}).catch(function(){{}});
+}});
 
 // ── Init ──────────────────────────────────────────────────────────────────
 (function init() {{

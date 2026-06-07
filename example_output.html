@@ -54,6 +54,9 @@ textarea.note:not(:placeholder-shown){background:#fffbeb;border-color:#d97706;bo
 .bar-user{background:var(--user)}
 .bar-contact{background:var(--contact)}
 .bar-label{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:2px}
+.notes-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;box-shadow:var(--shadow)}
+.btn-note-action{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;color:var(--text)}
+.btn-note-action:hover{background:var(--contact);color:#fff;border-color:var(--contact)}
 .timeline-event{padding:10px 14px;border-left:3px solid var(--border);margin-bottom:8px;font-size:13px}
 .timeline-event.positive{border-color:var(--ok)}
 .timeline-event.warning{border-color:var(--warn)}
@@ -246,8 +249,27 @@ function badge(i){
   return m[i]?`<span class="badge ${m[i]}">${l[i]}</span>`:"";
 }
 function noteKey(cid,date){ return `note_${cid}_${date}`; }
-function saveNote(cid,date,val){ localStorage.setItem(noteKey(cid,date),val); }
+function saveNote(cid,date,val){
+  localStorage.setItem(noteKey(cid,date),val);
+  if(typeof pywebview!=='undefined'&&pywebview.api&&pywebview.api.save_note)
+    pywebview.api.save_note(noteKey(cid,date),val).catch(()=>{});
+}
 function loadNote(cid,date){ return localStorage.getItem(noteKey(cid,date))||""; }
+function exportNotes(){
+  const out={};
+  for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k&&k.startsWith('note_')) out[k]=localStorage.getItem(k); }
+  if(!Object.keys(out).length){ alert('No notes saved yet.'); return; }
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(out,null,2)],{type:'application/json'}));
+  a.download='whatsapp_analyser_notes.json'; a.click();
+}
+function importNotes(){
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='.json';
+  inp.onchange=e=>{ const r=new FileReader(); r.onload=ev=>{
+    try{ const n=JSON.parse(ev.target.result); Object.entries(n).forEach(([k,v])=>localStorage.setItem(k,v)); renderMain(); }
+    catch(err){ alert('Could not read file: '+err.message); }
+  }; r.readAsText(e.target.files[0]); }; inp.click();
+}
 function getChatById(id){ return CHATS.find(c=>c.id===id)||null; }
 function destroyChart(id){ if(charts[id]){ charts[id].destroy(); delete charts[id]; } }
 
@@ -255,6 +277,23 @@ function rollingAvg(obj, w=7){
   const keys=Object.keys(obj).sort(), vals=keys.map(k=>obj[k]), out={};
   keys.forEach((k,i)=>{ const s=vals.slice(Math.max(0,i-w+1),i+1); out[k]=s.reduce((a,b)=>a+b,0)/s.length; });
   return out;
+}
+function dateToIsoWeek(dateStr){
+  var d=new Date(dateStr+'T00:00:00'), day=d.getUTCDay()||7;
+  d.setUTCDate(d.getUTCDate()+4-day);
+  var y=new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  return d.getUTCFullYear()+'-W'+String(Math.ceil(((d-y)/86400000+1)/7)).padStart(2,'0');
+}
+function absWeekly(s){
+  var wm={};
+  Object.entries(s).forEach(function(kv){ var w=dateToIsoWeek(kv[0]); (wm[w]||(wm[w]=[])).push(Math.abs(kv[1])); });
+  var weeks=Object.keys(wm).sort();
+  return {weeks,vals:weeks.map(function(w){return wm[w].reduce(function(a,b){return a+b;},0)/wm[w].length;})};
+}
+function dailyDiff(u,c){
+  var diff={};
+  Object.keys(u).forEach(function(d){ if(c[d]!==undefined) diff[d]=u[d]-c[d]; });
+  return diff;
 }
 function makeLineChart(cid, labels, datasets){
   destroyChart(cid);
@@ -373,6 +412,13 @@ function renderConversations(el){
 
 // ── Timeline ──────────────────────────────────────────────────────────────────
 function renderTimeline(el, chat){
+  el.innerHTML=`<div class="notes-toolbar">
+    <span style="font-size:12px;color:var(--muted)">📝 Notes are saved in your browser. Back them up to keep them safe.</span>
+    <div style="display:flex;gap:8px">
+      <button class="btn-note-action" onclick="exportNotes()">⬇ Export notes</button>
+      <button class="btn-note-action" onclick="importNotes()">⬆ Import notes</button>
+    </div>
+  </div>`;
   const byDate={};
   chat.messages_for_timeline.forEach(m=>{ (byDate[m.date]||(byDate[m.date]=[])).push(m); });
   let html=`<div>`;
@@ -389,7 +435,7 @@ function renderTimeline(el, chat){
     </div></div>`;
   });
   html+=`</div>`;
-  el.innerHTML=html;
+  el.innerHTML += html;
 }
 function renderMergedTimeline(el){
   const all=[];
@@ -438,10 +484,14 @@ function renderVisits(el, chat){
 
 // ── Sentiment ─────────────────────────────────────────────────────────────────
 function renderSentimentChart(el, chats){
+  const colors=["#25D366","#1a73e8","#e91e63","#ff9800"];
+  const colorsDash=["#25D366cc","#1a73e8cc","#e91e63cc","#ff9800cc"];
+
+  // Chart 1: Mood
   el.innerHTML=`
     <div class="card">
       <h2>Mood over time</h2>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Score runs from <b>−1</b> (most negative) through <b>0</b> (neutral) to <b>+1</b> (most positive). Plotted as a 7-day rolling average. Solid line = you &nbsp;|&nbsp; Dashed line = contact.</p>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Score runs from <b>−1</b> (most negative) through <b>0</b> (neutral) to <b>+1</b> (most positive). Plotted as a 7-day rolling average. Solid = you &nbsp;|&nbsp; Dashed = contact.</p>
       <div class="chart-wrap"><canvas id="sentChart"></canvas></div>
     </div>
     <div class="card">
@@ -449,29 +499,76 @@ function renderSentimentChart(el, chats){
       <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Messages sent per week. Gaps or sudden drops often indicate silence, conflict, or a change in the relationship.</p>
       <div class="chart-wrap-sm"><canvas id="volChart"></canvas></div>
     </div>`;
-  const colors=["#25D366","#1a73e8","#e91e63","#ff9800"];
+
   const allDates=[...new Set(chats.flatMap(c=>Object.keys(c.daily_sentiment.user||{}).concat(Object.keys(c.daily_sentiment.contact||{}))))].sort();
   const sentDS=[];
   chats.forEach((chat,i)=>{
     const uA=rollingAvg(chat.daily_sentiment.user||{}), cA=rollingAvg(chat.daily_sentiment.contact||{});
     const lbl=chats.length>1?chat.name:"";
     sentDS.push({label:lbl?`You (${lbl})`:"You",data:allDates.map(d=>uA[d]??null),borderColor:colors[i],backgroundColor:colors[i]+"22",borderWidth:2,pointRadius:1,spanGaps:true,tension:.3});
-    sentDS.push({label:lbl?chat.name:chat.name,data:allDates.map(d=>cA[d]??null),borderColor:colors[i]+"cc",backgroundColor:"transparent",borderWidth:2,borderDash:[4,4],pointRadius:1,spanGaps:true,tension:.3});
+    sentDS.push({label:lbl?chat.name:chat.name,data:allDates.map(d=>cA[d]??null),borderColor:colorsDash[i],backgroundColor:"transparent",borderWidth:2,borderDash:[4,4],pointRadius:1,spanGaps:true,tension:.3});
   });
   requestAnimationFrame(()=>makeLineChart("sentChart",allDates,sentDS));
+
+  // Chart 2: Volume
   const allWeeks=[...new Set(chats.flatMap(c=>(c.weekly_volume&&c.weekly_volume.weeks)||[]))].sort();
   const volDS=[];
-  const bc=["rgba(37,211,102,.7)","rgba(26,115,232,.7)","rgba(233,30,99,.7)"];
-  const bcc=["rgba(37,211,102,.35)","rgba(26,115,232,.35)","rgba(233,30,99,.35)"];
   chats.forEach((chat,i)=>{
     if(!chat.weekly_volume) return;
     const wm={}; chat.weekly_volume.weeks.forEach((w,j)=>{ wm[w]={u:chat.weekly_volume.user[j],c:chat.weekly_volume.contact[j]}; });
     const lbl=chats.length>1?chat.name:"";
-    volDS.push({label:lbl?`You (${lbl})`:"You",data:allWeeks.map(w=>wm[w]?wm[w].u:0),backgroundColor:bc[i%3],borderRadius:3,borderWidth:0});
-    volDS.push({label:lbl?chat.name:chat.name,data:allWeeks.map(w=>wm[w]?wm[w].c:0),backgroundColor:bcc[i%3],borderRadius:3,borderWidth:0});
+    volDS.push({label:lbl?`You (${lbl})`:"You",data:allWeeks.map(w=>wm[w]?wm[w].u:0),backgroundColor:`rgba(37,211,102,${chats.length>1?.5:.7})`,borderRadius:3,borderWidth:0});
+    volDS.push({label:lbl?chat.name:chat.name,data:allWeeks.map(w=>wm[w]?wm[w].c:0),backgroundColor:`rgba(26,115,232,${chats.length>1?.35:.5})`,borderRadius:3,borderWidth:0});
   });
-  const volLabels=allWeeks.map((w,i)=>i%2===0?w:"");
-  requestAnimationFrame(()=>makeBarChart("volChart",volLabels,volDS));
+  requestAnimationFrame(()=>makeBarChart("volChart",allWeeks.map((w,i)=>i%2===0?w:""),volDS));
+
+  // Chart 3: Emotional intensity
+  var intCard=document.createElement('div'); intCard.className='card';
+  intCard.innerHTML=`<h2>Emotional intensity</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px">How strongly felt messages are each week — regardless of positive or negative direction. 0 = neutral tone, 1 = maximum intensity. Useful for spotting high-charge periods even when overall sentiment is mixed.</p>
+    <div class="chart-wrap-sm"><canvas id="intChart"></canvas></div>`;
+  el.appendChild(intCard);
+  const intDS=[], intWeeksAll=new Set();
+  chats.forEach((chat,i)=>{
+    const uI=absWeekly(chat.daily_sentiment.user||{}), cI=absWeekly(chat.daily_sentiment.contact||{});
+    uI.weeks.forEach(w=>intWeeksAll.add(w)); cI.weeks.forEach(w=>intWeeksAll.add(w));
+    const uM={}, cM={};
+    uI.weeks.forEach((w,j)=>uM[w]=uI.vals[j]); cI.weeks.forEach((w,j)=>cM[w]=cI.vals[j]);
+    const allIW=[...intWeeksAll].sort(), lbl=chats.length>1?chat.name:"";
+    intDS.push({label:lbl?`You (${lbl})`:"You",data:allIW.map(w=>uM[w]??null),borderColor:colors[i],backgroundColor:colors[i]+"22",borderWidth:2,pointRadius:1,spanGaps:true,tension:.3});
+    intDS.push({label:lbl?chat.name:chat.name,data:allIW.map(w=>cM[w]??null),borderColor:colorsDash[i],backgroundColor:"transparent",borderWidth:2,borderDash:[4,4],pointRadius:1,spanGaps:true,tension:.3});
+    if(i===chats.length-1) requestAnimationFrame(()=>{
+      destroyChart("intChart");
+      var ctx=document.getElementById("intChart"); if(!ctx) return;
+      charts["intChart"]=new Chart(ctx,{type:"line",data:{labels:[...intWeeksAll].sort(),datasets:intDS},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"top"}},
+          scales:{x:{ticks:{maxTicksLimit:14,maxRotation:45}},y:{min:0,max:1,ticks:{stepSize:0.25}}}}});
+    });
+  });
+
+  // Chart 4: Sentiment divergence
+  var divCard=document.createElement('div'); divCard.className='card';
+  divCard.innerHTML=`<h2>Sentiment gap — you vs them</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Your mood score minus theirs on days where both sent messages. <b>Above 0</b>: you were more positive. <b>Below 0</b>: they were more positive. Persistent gaps can signal disconnection or one-sided emotional labour.</p>
+    <div class="chart-wrap-sm"><canvas id="divChart"></canvas></div>`;
+  el.appendChild(divCard);
+  const divDS=[], divColors=["#7c3aed","#0891b2","#be185d"];
+  chats.forEach((chat,i)=>{
+    const diff=dailyDiff(chat.daily_sentiment.user||{},chat.daily_sentiment.contact||{});
+    const avg=rollingAvg(diff,7), diffDates=Object.keys(avg).sort();
+    const lbl=chats.length>1?chat.name:"";
+    divDS.push({label:lbl||"Gap",data:diffDates.map(d=>avg[d]??null),borderColor:divColors[i%3],
+      backgroundColor:(ctx2)=>{ const v=ctx2.raw; return v==null?"transparent":v>=0?"rgba(16,185,129,.15)":"rgba(239,68,68,.15)"; },
+      borderWidth:2,pointRadius:1,spanGaps:true,tension:.3,fill:true});
+    if(i===chats.length-1) requestAnimationFrame(()=>{
+      destroyChart("divChart");
+      var ctx=document.getElementById("divChart"); if(!ctx) return;
+      charts["divChart"]=new Chart(ctx,{type:"line",data:{labels:diffDates,datasets:divDS},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"top"}},
+          scales:{x:{ticks:{maxTicksLimit:14,maxRotation:45}},y:{min:-1,max:1,ticks:{stepSize:0.5},
+            grid:{color:(ctx3)=>ctx3.tick.value===0?"#94a3b8":"#e2e8f0"}}}}});
+    });
+  });
 }
 
 // ── Initiation ────────────────────────────────────────────────────────────────
