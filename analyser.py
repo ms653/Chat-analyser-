@@ -553,8 +553,7 @@ def extract_person_mentions(chat: dict, min_count: int = 3) -> dict:
     Heuristic: capitalised words that are not the known sender names or common words.
     """
     known = {PRIMARY_USER_NAME.lower(), chat["contact_name"].lower()}
-    # Add first names only too
-    known.update(n.split()[0].lower() for n in known if n)
+    known.update({n.split()[0].lower() for n in known if n})
 
     STOP = {"i", "i'm", "i've", "i'll", "i'd", "me", "my", "we", "our", "she", "he",
             "her", "his", "them", "they", "it", "that", "this", "what", "when",
