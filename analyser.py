@@ -56,7 +56,9 @@ CUSTOM_TOPICS = []               # e.g. ["football", "therapy", "job hunting"]
 # Matches:  [DD/MM/YYYY, HH:MM:SS] Sender: Message
 # Also handles two-digit year and 12-hr timestamps WhatsApp sometimes uses
 MSG_RE = re.compile(
-    r"^\[?(\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[APap][Mm])?)\]?\s[-–]\s(.+?):\s(.+)$"
+    r"^[‎‏]?\[?(\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}),?\s+"
+    r"(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[APap][Mm])?)\]?(?:\s[-–]\s|\s)"
+    r"(.+?):\s(.+)$"
 )
 
 NOISE_PATTERNS = [
@@ -117,7 +119,7 @@ def detect_senders(file_path: str, sample_size: int = 400) -> list:
     for line in raw.splitlines():
         m = MSG_RE.match(line)
         if m:
-            sender = m.group(3).strip()
+            sender = m.group(3).strip().strip('‎‏‪‬')
             text = m.group(4).strip()
             if not _is_noise(text):
                 counts[sender] = counts.get(sender, 0) + 1
@@ -146,7 +148,7 @@ def parse_chat(config: dict) -> dict:
                 messages.append(current)
             date_str, time_str, sender, text = m.groups()
             dt = _parse_dt(date_str, time_str)
-            sender = sender.strip()
+            sender = sender.strip().strip('‎‏‪‬')
             is_user = sender.lower() == PRIMARY_USER_NAME.lower()
             current = {
                 "dt": dt,
@@ -993,9 +995,20 @@ a{{color:var(--contact)}}
 .header{{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}}
 .header h1{{font-size:18px;font-weight:700}}
 .header .meta{{color:var(--muted);font-size:13px}}
-.chat-selector{{background:var(--surface);border-bottom:1px solid var(--border);padding:8px 24px;display:flex;gap:8px;flex-wrap:wrap}}
-.chat-btn{{padding:6px 14px;border-radius:20px;border:1px solid var(--border);background:var(--bg);cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}}
-.chat-btn.active{{background:var(--contact);color:#fff;border-color:var(--contact)}}
+.page-layout{{display:flex;align-items:flex-start}}
+.sidebar{{width:220px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);position:sticky;top:60px;height:calc(100vh - 60px);overflow-y:auto;padding:8px 0}}
+.sidebar-title{{padding:8px 16px 6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}}
+.sb-btn{{display:block;width:100%;padding:10px 16px;border:none;background:transparent;text-align:left;cursor:pointer;border-left:3px solid transparent;transition:background .15s,border-color .15s}}
+.sb-btn:hover{{background:var(--bg);border-left-color:var(--border)}}
+.sb-btn.active{{background:#eff6ff;border-left-color:var(--contact)}}
+.sb-btn.active .sb-name{{color:var(--contact)}}
+.sb-btn.active .sb-sub,.sb-btn.active .sb-tag{{color:var(--contact);opacity:.8}}
+.sb-btn.active .sb-flag{{color:var(--warn)}}
+.sb-name{{display:block;font-weight:600;font-size:14px}}
+.sb-sub{{display:block;font-size:12px;color:var(--muted);margin-top:2px}}
+.sb-tag{{display:inline-block;font-size:10px;padding:1px 6px;border-radius:8px;background:var(--bg);border:1px solid var(--border);margin:3px 2px 0 0}}
+.sb-flag{{display:inline-block;font-size:11px;color:var(--warn);margin-top:3px}}
+.main-area{{flex:1;min-width:0;display:flex;flex-direction:column}}
 .tabs{{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;display:flex;gap:0;overflow-x:auto}}
 .tab-btn{{padding:12px 18px;border:none;background:transparent;cursor:pointer;font-size:14px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s}}
 .tab-btn.active{{color:var(--contact);border-bottom-color:var(--contact)}}
@@ -1073,7 +1086,16 @@ textarea.note:not(:placeholder-shown){{background:#fffbeb;border-color:#d97706;b
 .chart-wrap-sm{{position:relative;height:200px;margin-bottom:8px}}
 .tag{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--bg);border:1px solid var(--border);margin-right:4px}}
 .cross-chat-card{{border-left:4px solid var(--warn);padding:12px 16px;background:var(--surface);border-radius:0 var(--radius) var(--radius) 0;margin-bottom:10px;font-size:13px}}
-@media(max-width:600px){{
+@media(max-width:700px){{
+  .page-layout{{flex-direction:column}}
+  .sidebar{{width:100%;height:auto;position:static;border-right:none;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px}}
+  .sidebar-title{{display:none}}
+  .sb-btn{{width:auto;display:inline-block;padding:5px 12px;border-radius:20px;border:1px solid var(--border);border-left:1px solid var(--border);font-size:13px;margin:0}}
+  .sb-btn:hover{{background:var(--bg);border-left-color:var(--border)}}
+  .sb-btn.active{{background:var(--contact);color:#fff;border-left-color:var(--contact)}}
+  .sb-btn.active .sb-name{{color:#fff}}
+  .sb-sub,.sb-tag,.sb-flag{{display:none}}
+  .sb-name{{font-size:13px}}
   .stat-row{{gap:8px}}.stat{{min-width:90px;padding:10px}}
   .bubble-inner{{max-width:82%}}
   .header h1{{font-size:15px}}
@@ -1089,13 +1111,15 @@ textarea.note:not(:placeholder-shown){{background:#fffbeb;border-color:#d97706;b
   </div>
 </div>
 
-<div class="chat-selector" id="chatSelector">
-  {"".join(f'<button class="chat-btn" data-chat="{re.sub(chr(92) + "W+", "_", c["contact_name"])}" onclick="selectChat(this)">{_escape_html(c["contact_name"])}</button>' for c in chats)}
-  {"" if len(chats) < 2 else '<button class="chat-btn active" data-chat="all" onclick="selectChat(this)">All conversations</button>'}
+<div class="page-layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-title">Conversations</div>
+  </aside>
+  <div class="main-area">
+    <div id="tabBar" class="tabs"></div>
+    <div class="main" id="mainContent"></div>
+  </div>
 </div>
-
-<div id="tabBar" class="tabs"></div>
-<div class="main" id="mainContent"></div>
 
 <script>
 const PRIMARY_USER = {_j(PRIMARY_USER_NAME)};
@@ -1109,6 +1133,7 @@ const CRISIS_ASSESSED = {_j(ai_results.get("crisis_assessed", {}))};
 
 let currentChat = null;
 let currentTab = "conversations";
+let _lastSingleTab = "timeline";
 let charts = {{}};
 
 // ── Utilities ────────────────────────────────────────────────────────────────
@@ -1310,20 +1335,47 @@ function renderTabBar(chatId) {{
 }}
 
 // ── Main render dispatcher ───────────────────────────────────────────────
+function buildSidebar() {{
+  const sb=document.getElementById("sidebar");
+  if(!sb) return;
+  sb.querySelectorAll(".sb-btn").forEach(b=>b.remove());
+  if(CHATS.length>1) {{
+    const b=document.createElement("button");
+    b.className="sb-btn"; b.dataset.chat="all";
+    b.innerHTML=`<span class="sb-name">All conversations</span><span class="sb-sub">${{CHATS.length}} chats</span>`;
+    b.onclick=()=>selectChat(b); sb.appendChild(b);
+  }}
+  CHATS.forEach(chat=>{{
+    const b=document.createElement("button");
+    b.className="sb-btn"; b.dataset.chat=chat.id;
+    const tags=(chat.tags||[]).map(t=>`<span class="sb-tag">${{esc(t)}}</span>`).join("");
+    const dc=(chat.distress_signals||[]).length;
+    b.innerHTML=`<span class="sb-name">${{esc(chat.name)}}</span>`+
+      (chat.relationship?`<span class="sb-sub">${{esc(chat.relationship)}}</span>`:"")+
+      `<div style="margin-top:3px">${{tags}}${{dc?`<span class="sb-flag">⚠ ${{dc}}</span>`:""}}</div>`;
+    b.onclick=()=>selectChat(b); sb.appendChild(b);
+  }});
+}}
+
 function selectChat(btn) {{
-  document.querySelectorAll(".chat-btn").forEach(b=>b.classList.remove("active"));
+  document.querySelectorAll(".sb-btn").forEach(b=>b.classList.remove("active"));
   btn.classList.add("active");
   currentChat=btn.dataset.chat;
-  // Reset to appropriate tab
-  if(currentChat==="all") currentTab="conversations"; else currentTab="timeline";
+  const availTabs=getTabsForChat(currentChat).map(t=>t.id);
+  if(!availTabs.includes(currentTab)) {{
+    if(currentChat==="all") {{
+      currentTab="conversations";
+    }} else {{
+      currentTab=availTabs.includes(_lastSingleTab)?_lastSingleTab:"timeline";
+    }}
+  }}
   renderTabBar(currentChat);
   renderMain();
 }}
 
 function selectTab(tabId) {{
   currentTab=tabId;
-  document.querySelectorAll(".tab-btn").forEach(b=>b.classList.toggle("active",b.textContent.trim().replace(/⚠ /,"")===tabId||b.onclick.toString().includes(`'${{tabId}}'`)));
-  // Re-render tab bar to update active class
+  if(currentChat!=="all") _lastSingleTab=tabId;
   renderTabBar(currentChat);
   renderMain();
 }}
@@ -1957,10 +2009,10 @@ window.addEventListener('pywebviewready', function() {{
     document.getElementById("mainContent").innerHTML=`<p class="no-data">No chat data loaded.</p>`;
     return;
   }}
-  // Auto-select: "all" if multiple chats, first chat otherwise
-  const defaultBtn = CHATS.length>1
+  buildSidebar();
+  const defaultBtn=CHATS.length>1
     ? document.querySelector('[data-chat="all"]')
-    : document.querySelector('.chat-btn');
+    : document.querySelector(".sb-btn");
   if(defaultBtn) selectChat(defaultBtn);
 }})();
 </script>

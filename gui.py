@@ -621,7 +621,7 @@ function chatHTML(id, d) {
           <button class="btn btn-ghost" onclick="pick(${id},'chat')">Browse…</button>
         </div>
         <div id="sh-${id}" style="display:none;margin-top:10px;padding:12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:13px">
-          <div style="font-weight:600;margin-bottom:6px">Two senders detected — which one is you?</div>
+          <div id="sh-lbl-${id}" style="font-weight:600;margin-bottom:6px">Senders detected — which one is you?</div>
           <div id="sb-${id}" style="display:flex;gap:8px;flex-wrap:wrap"></div>
         </div>
       </div>
@@ -688,11 +688,18 @@ async function pick(id, type) {
 
       // Auto-detect sender names from the file
       const senders = await pywebview.api.detect_senders(path);
-      if (senders && senders.length >= 2) {
+      const hint = document.getElementById(`sh-${id}`);
+      const btns = document.getElementById(`sb-${id}`);
+      if (!senders || senders.length === 0) {
+        if (hint && btns) {
+          document.getElementById(`sh-lbl-${id}`).textContent = 'No messages found in this file';
+          btns.innerHTML = '<span style="color:#ef4444">Make sure it\'s a WhatsApp export (.txt) and not a screenshot or PDF.</span>';
+          hint.style.display = 'block';
+        }
+      } else {
         const primaryUser = document.getElementById('primaryUser').value.trim();
         const nameField   = document.getElementById(`n-${id}`);
-        if (primaryUser) {
-          // Match primary user against detected names (case-insensitive partial match)
+        if (primaryUser && senders.length >= 2) {
           const isMe = s => s.toLowerCase() === primaryUser.toLowerCase()
                          || s.toLowerCase().includes(primaryUser.split(' ')[0].toLowerCase())
                          || primaryUser.toLowerCase().includes(s.split(' ')[0].toLowerCase());
