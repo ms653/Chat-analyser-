@@ -4,6 +4,9 @@
 # Core
 requests>=2.31.0
 
+# GUI (desktop window with embedded browser — no external browser needed)
+pywebview>=5.0.0
+
 # NLP — at least one required
 # Option A (recommended): HuggingFace transformers (better sentiment quality)
 transformers>=4.40.0

@@ -1,0 +1,554 @@
+#!/usr/bin/env python3
+"""
+WhatsApp Chat Analyser — GUI
+Double-click the built .app to launch. No terminal or browser needed.
+The config form and analysis output both live inside this one window.
+"""
+
+import os
+import sys
+import json
+import tempfile
+import threading
+from pathlib import Path
+
+import webview
+
+# ── Path fix for PyInstaller bundle vs running from source ──────────────────
+if getattr(sys, "frozen", False):
+    _BASE = sys._MEIPASS  # PyInstaller extracts here
+else:
+    _BASE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _BASE)
+
+import analyser  # noqa: E402  (must come after path fix)
+
+# Saved config lives in home dir so it persists between runs
+CONFIG_FILE = Path.home() / ".whatsapp_analyser_config.json"
+
+# ── Back-button toolbar injected into results HTML ───────────────────────────
+_TOOLBAR = (
+    '<div id="_gui_bar" style="position:fixed;top:0;left:0;right:0;height:44px;'
+    'background:#1a202c;display:flex;align-items:center;padding:0 20px;z-index:10000;'
+    'box-shadow:0 2px 10px rgba(0,0,0,.4)">'
+    '<button onclick="pywebview.api.go_back()" style="background:transparent;border:1px solid #4a5568;'
+    'color:#e2e8f0;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">'
+    "← New Analysis</button>"
+    '<span style="color:#4a5568;font-size:13px;margin-left:16px;font-family:-apple-system,sans-serif">'
+    "WhatsApp Chat Analyser</span>"
+    "</div>"
+    '<div style="height:44px"></div>'
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PYTHON API (exposed to the JS config form)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AnalyserAPI:
+    """All methods on this class are callable from JavaScript as pywebview.api.*"""
+
+    def __init__(self):
+        self._window = None
+
+    def set_window(self, w):
+        self._window = w
+
+    # ── File pickers ─────────────────────────────────────────────────────────
+
+    def pick_chat_file(self):
+        r = self._window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            file_types=("Text Files (*.txt)", "All Files (*.*)"),
+        )
+        return r[0] if r else ""
+
+    def pick_framework_file(self):
+        r = self._window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            file_types=("Markdown (*.md)", "Text Files (*.txt)", "All Files (*.*)"),
+        )
+        return r[0] if r else ""
+
+    # ── Config persistence ───────────────────────────────────────────────────
+
+    def load_config(self):
+        try:
+            if CONFIG_FILE.exists():
+                return json.loads(CONFIG_FILE.read_text())
+        except Exception:
+            pass
+        return None
+
+    def save_config(self, config):
+        try:
+            CONFIG_FILE.write_text(json.dumps(config, indent=2))
+        except Exception as e:
+            print(f"[WARN] Config save failed: {e}")
+
+    # ── Navigation ───────────────────────────────────────────────────────────
+
+    def go_back(self):
+        """Return to the config form from the results view."""
+        self._window.load_html(CONFIG_HTML)
+
+    # ── Analysis ─────────────────────────────────────────────────────────────
+
+    def run_analysis(self, config):
+        """Kick off analysis in a background thread (returns immediately to JS)."""
+        t = threading.Thread(target=self._worker, args=(config,), daemon=True)
+        t.start()
+
+    # ── Background worker ─────────────────────────────────────────────────────
+
+    def _log(self, msg: str):
+        self._window.evaluate_js(f"appendLog({json.dumps(str(msg))})")
+
+    def _worker(self, config: dict):
+        try:
+            # ── Patch analyser module globals from GUI config ────────────────
+            analyser.PRIMARY_USER_NAME = config.get("primary_user", "")
+            analyser.OLLAMA_BASE_URL   = config.get("ollama_url", "http://localhost:11434")
+            analyser.OLLAMA_MODEL      = config.get("ollama_model", "gemma3")
+            analyser.ANTHROPIC_API_KEY = config.get("api_key", "")
+
+            no_ai         = config.get("no_ai", False)
+            claude_crisis = config.get("claude_crisis", False)
+            engine        = config.get("nlp_engine", "textblob")
+            custom_topics = config.get("custom_topics", [])
+
+            # 1 ── Parse chats ────────────────────────────────────────────────
+            chats_cfg = config.get("chats", [])
+            self._log(f"Parsing {len(chats_cfg)} chat file(s)…")
+
+            chats = []
+            for cfg in chats_cfg:
+                self._log(f"  → {cfg.get('contact_name', '?')}")
+                c = analyser.parse_chat(cfg)
+                if c["messages"]:
+                    chats.append(c)
+                else:
+                    self._log(
+                        f"    ⚠ No messages found — check the file path and that your "
+                        f"name matches the export exactly"
+                    )
+
+            if not chats:
+                self._window.evaluate_js(
+                    "setError('No messages parsed. Check your chat file paths and "
+                    "that your Primary User Name matches the export exactly.')"
+                )
+                self._window.evaluate_js("setRunning(false)")
+                return
+
+            total = sum(len(c["messages"]) for c in chats)
+            self._log(f"Parsed {total:,} messages across {len(chats)} chat(s).")
+
+            # 2 ── Per-chat NLP analysis ──────────────────────────────────────
+            for chat in chats:
+                self._log(f"Scoring sentiment — {chat['contact_name']}…")
+                analyser.run_per_chat_analysis(chat, engine, custom_topics)
+
+            # 3 ── Cross-chat correlation ─────────────────────────────────────
+            self._log("Cross-chat correlation…")
+            cross_chat = analyser.run_cross_chat_analysis(chats)
+
+            # 4 ── AI calls ───────────────────────────────────────────────────
+            ai_results = {
+                "people_cards":        {},
+                "narrative_vs_record": {},
+                "framework_suggestions": {},
+                "timeline_highlights": [],
+                "cross_chat_links":    [],
+                "crisis_assessed":     {},
+            }
+
+            if not no_ai:
+                base  = analyser.OLLAMA_BASE_URL
+                model = analyser.OLLAMA_MODEL
+
+                self._log("AI ① People & sentiment cards…")
+                ai_results["people_cards"] = analyser.ai_people_cards(
+                    cross_chat["merged_people"], base, model
+                )
+
+                for chat in chats:
+                    self._log(f"AI ② Narrative vs record — {chat['contact_name']}…")
+                    ai_results["narrative_vs_record"][chat["contact_name"]] = (
+                        analyser.ai_narrative_vs_record(chat, cross_chat, base, model)
+                    )
+
+                for chat in chats:
+                    if chat.get("framework_content"):
+                        self._log(f"AI ③ Framework suggestions — {chat['contact_name']}…")
+                        ai_results["framework_suggestions"][chat["contact_name"]] = (
+                            analyser.ai_framework_personalisation(chat, base, model)
+                        )
+
+                self._log("AI ④ Timeline highlights…")
+                ai_results["timeline_highlights"] = analyser.ai_timeline_highlights(
+                    chats, base, model
+                )
+
+                if len(chats) > 1:
+                    self._log("AI ⑤ Cross-chat links…")
+                    ai_results["cross_chat_links"] = analyser.ai_cross_chat_links(
+                        cross_chat, chats, base, model
+                    )
+
+                if claude_crisis and analyser.ANTHROPIC_API_KEY:
+                    self._log("AI ⑥ Crisis assessment (Claude)…")
+                    for chat in chats:
+                        flags = chat["analytics"]["crisis_flags"]
+                        if flags:
+                            assessed = analyser.ai_crisis_assessment_claude(
+                                flags, analyser.ANTHROPIC_API_KEY
+                            )
+                            ai_results["crisis_assessed"][chat["contact_name"]] = {
+                                i: item for i, item in enumerate(assessed)
+                            }
+
+            # 5 ── Generate HTML → temp file → read back ──────────────────────
+            self._log("Building report…")
+            tmp = tempfile.NamedTemporaryFile(
+                suffix=".html", delete=False, mode="w", encoding="utf-8"
+            )
+            tmp_path = tmp.name
+            tmp.close()
+
+            analyser.generate_html(chats, cross_chat, ai_results, tmp_path)
+            html = Path(tmp_path).read_text(encoding="utf-8")
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+            # Inject the "← New Analysis" toolbar
+            html = html.replace("<body>", "<body>" + _TOOLBAR, 1)
+
+            self._log("Done ✓  Loading results…")
+            self._window.evaluate_js("setRunning(false)")
+            self._window.load_html(html)
+
+        except Exception as exc:
+            import traceback
+            self._window.evaluate_js(f"setError({json.dumps(str(exc))})")
+            self._window.evaluate_js("setRunning(false)")
+            print(traceback.format_exc())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIG HTML  (the setup form — embedded so the .app is fully self-contained)
+# ─────────────────────────────────────────────────────────────────────────────
+
+CONFIG_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WhatsApp Chat Analyser</title>
+<style>
+:root{
+  --bg:#f0f4f8;--surface:#fff;--border:#e2e8f0;--text:#1a202c;--muted:#718096;
+  --green:#25D366;--blue:#1a73e8;--danger:#ef4444;--radius:10px;
+  --shadow:0 2px 8px rgba(0,0,0,.08);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:15px;color:var(--text);line-height:1.5}
+.app{max-width:740px;margin:0 auto;padding:24px 16px 80px}
+.header{text-align:center;padding:36px 0 28px}
+.header .icon{font-size:40px;line-height:1;margin-bottom:10px}
+.header h1{font-size:24px;font-weight:800;margin-bottom:4px}
+.header p{color:var(--muted);font-size:13px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin-bottom:14px;box-shadow:var(--shadow)}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.step{width:26px;height:26px;border-radius:50%;background:var(--green);color:#fff;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.card-head h2{font-size:15px;font-weight:700}
+label{display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:5px}
+.hint{font-size:12px;color:var(--muted);margin-top:3px}
+input[type=text],input[type=password]{width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:7px;font-size:14px;color:var(--text);background:var(--bg);outline:none;transition:border .15s}
+input[type=text]:focus,input[type=password]:focus{border-color:var(--blue);background:#fff}
+.file-row{display:flex;gap:8px}
+.file-row input{flex:1;cursor:default;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:8px 16px;border-radius:7px;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-ghost{background:var(--bg);color:var(--text);border:1.5px solid var(--border)}
+.btn-ghost:hover{background:#e9ecef}
+.btn-dashed{background:transparent;color:var(--blue);border:1.5px dashed #93c5fd;width:100%;padding:10px;border-radius:7px;font-size:13px;margin-top:10px}
+.btn-dashed:hover{background:#eff6ff}
+.btn-remove{background:transparent;color:#ef4444;border:1px solid #fecaca;padding:4px 10px;font-size:12px;border-radius:5px}
+.btn-remove:hover{background:#fee2e2}
+.chat-row{border:1.5px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px;background:var(--bg)}
+.chat-row-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.chat-row-head .lbl{font-weight:700;font-size:14px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.full{grid-column:1/-1}
+.fld{display:flex;flex-direction:column;gap:4px}
+.radio-group{display:flex;gap:20px;flex-wrap:wrap;padding:4px 0}
+.radio-opt{display:flex;align-items:center;gap:7px;font-size:14px;cursor:pointer;font-weight:400}
+.radio-opt input{accent-color:var(--blue)}
+.check-opt{display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;font-weight:400;padding:6px 0}
+.check-opt input{accent-color:var(--blue);width:15px;height:15px}
+details summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;padding:4px 0;user-select:none}
+details summary::before{content:"▶";font-size:9px;color:var(--muted);transition:transform .2s}
+details[open] summary::before{transform:rotate(90deg)}
+.detail-body{padding-top:14px}
+.run-wrap{text-align:center;padding:8px 0}
+.run-btn{padding:14px 48px;font-size:16px;font-weight:800;border-radius:12px;background:var(--green);color:#fff;border:none;cursor:pointer;box-shadow:0 4px 14px rgba(37,211,102,.35);transition:all .15s}
+.run-btn:hover:not(:disabled){background:#1db854;box-shadow:0 6px 18px rgba(37,211,102,.45);transform:translateY(-1px)}
+.run-btn:disabled{background:#a0aec0;cursor:not-allowed;box-shadow:none;transform:none}
+.err{background:#fef2f2;border:1.5px solid #fecaca;border-radius:7px;padding:12px 16px;margin-top:12px;font-size:13px;color:var(--danger);display:none}
+.log-wrap{background:#0f172a;border-radius:var(--radius);padding:16px;margin-top:14px;display:none}
+.log-title{color:#4ade80;font-family:monospace;font-size:12px;margin-bottom:8px;font-weight:700}
+#log{max-height:220px;overflow-y:auto;font-family:"SF Mono",monospace;font-size:12px;color:#94a3b8;line-height:1.9}
+.log-ok{color:#4ade80}
+.log-warn{color:#fbbf24}
+#apiField{display:none;margin-top:10px}
+@media(max-width:540px){.grid2{grid-template-columns:1fr}.full{grid-column:1}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="header">
+    <div class="icon">💬</div>
+    <h1>WhatsApp Chat Analyser</h1>
+    <p>Fully local &amp; private — nothing leaves your machine</p>
+  </div>
+
+  <!-- Step 1 — Your name -->
+  <div class="card">
+    <div class="card-head"><div class="step">1</div><h2>Your name</h2></div>
+    <div class="fld">
+      <label for="primaryUser">Name exactly as it appears in your chat exports</label>
+      <input type="text" id="primaryUser" placeholder="e.g. Morgan Strutton" autocomplete="off" spellcheck="false">
+      <p class="hint">Open a .txt export in a text editor — your name appears at the start of your own messages.</p>
+    </div>
+  </div>
+
+  <!-- Step 2 — Chat files -->
+  <div class="card">
+    <div class="card-head"><div class="step">2</div><h2>Chat files</h2></div>
+    <div id="chatList"></div>
+    <button class="btn-dashed" onclick="addChat()">+ Add chat</button>
+  </div>
+
+  <!-- Step 3 — Settings -->
+  <div class="card">
+    <div class="card-head"><div class="step">3</div><h2>Settings</h2></div>
+
+    <div class="fld" style="margin-bottom:16px">
+      <label>Sentiment engine</label>
+      <div class="radio-group">
+        <label class="radio-opt"><input type="radio" name="nlp" value="textblob" checked> TextBlob <span style="color:var(--muted);font-size:12px">&nbsp;faster</span></label>
+        <label class="radio-opt"><input type="radio" name="nlp" value="transformers"> Transformers <span style="color:var(--muted);font-size:12px">&nbsp;more accurate, downloads ~250 MB on first use</span></label>
+      </div>
+    </div>
+
+    <details style="margin-bottom:14px">
+      <summary>Ollama (local AI)</summary>
+      <div class="detail-body grid2">
+        <div class="fld">
+          <label for="ollamaUrl">Ollama URL</label>
+          <input type="text" id="ollamaUrl" value="http://localhost:11434">
+        </div>
+        <div class="fld">
+          <label for="ollamaModel">Model</label>
+          <input type="text" id="ollamaModel" value="gemma3">
+          <p class="hint">Run <code>ollama list</code> to see installed models</p>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Advanced AI options</summary>
+      <div class="detail-body">
+        <label class="check-opt"><input type="checkbox" id="noAi"> Skip all AI — Python analysis only (no Ollama needed)</label>
+        <label class="check-opt"><input type="checkbox" id="claudeCrisis" onchange="toggleKey()"> Use Claude API for crisis assessment <span style="color:var(--muted);font-size:12px">(opt-in, requires API key)</span></label>
+        <div id="apiField">
+          <label for="apiKey">Anthropic API key</label>
+          <input type="password" id="apiKey" placeholder="sk-ant-…" autocomplete="off">
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <!-- Run -->
+  <div class="run-wrap">
+    <button class="run-btn" id="runBtn" onclick="run()">▶ Run Analysis</button>
+  </div>
+
+  <div class="err" id="errBox"></div>
+
+  <div class="log-wrap" id="logWrap">
+    <div class="log-title">● Running…</div>
+    <div id="log"></div>
+  </div>
+
+</div>
+<script>
+// ── Utilities ────────────────────────────────────────────────────────────────
+let _chatId = 0;
+
+function ea(s){ return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+// ── Chat rows ─────────────────────────────────────────────────────────────────
+function chatHTML(id, d) {
+  d = d || {};
+  return `<div class="chat-row" id="cr-${id}">
+    <div class="chat-row-head">
+      <span class="lbl">Chat ${id+1}</span>
+      <button class="btn btn-remove" onclick="rmChat(${id})">✕ Remove</button>
+    </div>
+    <div class="grid2">
+      <div class="fld full">
+        <label>WhatsApp export file (.txt)</label>
+        <div class="file-row">
+          <input type="text" id="f-${id}" placeholder="/path/to/WhatsApp Chat.txt" readonly value="${ea(d.file||'')}">
+          <button class="btn btn-ghost" onclick="pick(${id},'chat')">Browse…</button>
+        </div>
+      </div>
+      <div class="fld">
+        <label>Contact name</label>
+        <input type="text" id="n-${id}" placeholder="Mum" value="${ea(d.contact_name||'')}">
+      </div>
+      <div class="fld">
+        <label>Relationship</label>
+        <input type="text" id="r-${id}" placeholder="Mother" value="${ea(d.contact_relationship||'')}">
+      </div>
+      <div class="fld">
+        <label>Tags <span style="font-weight:400;color:var(--muted)">(comma-separated)</span></label>
+        <input type="text" id="t-${id}" placeholder="family, primary" value="${ea((d.tags||[]).join(', '))}">
+      </div>
+      <div class="fld">
+        <label>Framework file <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+        <div class="file-row">
+          <input type="text" id="w-${id}" placeholder="optional .md or .txt" readonly value="${ea(d.framework||'')}">
+          <button class="btn btn-ghost" onclick="pick(${id},'fw')">Browse…</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function addChat(d) {
+  const id = _chatId++;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = chatHTML(id, d);
+  document.getElementById('chatList').appendChild(wrap.firstElementChild);
+}
+
+function rmChat(id) { document.getElementById(`cr-${id}`)?.remove(); }
+
+async function pick(id, type) {
+  try {
+    const path = type === 'chat'
+      ? await pywebview.api.pick_chat_file()
+      : await pywebview.api.pick_framework_file();
+    if (path) document.getElementById(type==='chat'?`f-${id}`:`w-${id}`).value = path;
+  } catch(e){ console.error(e); }
+}
+
+// ── Build config from form ────────────────────────────────────────────────────
+function buildConfig() {
+  const chats = [];
+  document.querySelectorAll('.chat-row').forEach(row => {
+    const id = row.id.replace('cr-','');
+    const file = document.getElementById(`f-${id}`)?.value||'';
+    const name = document.getElementById(`n-${id}`)?.value||'';
+    if (!file||!name) return;
+    chats.push({
+      file,
+      contact_name: name,
+      contact_relationship: document.getElementById(`r-${id}`)?.value||'',
+      tags: (document.getElementById(`t-${id}`)?.value||'').split(',').map(x=>x.trim()).filter(Boolean),
+      framework: document.getElementById(`w-${id}`)?.value||null,
+    });
+  });
+  return {
+    primary_user:  document.getElementById('primaryUser').value.trim(),
+    chats,
+    nlp_engine:    document.querySelector('[name="nlp"]:checked')?.value||'textblob',
+    ollama_url:    document.getElementById('ollamaUrl').value||'http://localhost:11434',
+    ollama_model:  document.getElementById('ollamaModel').value||'gemma3',
+    no_ai:         document.getElementById('noAi').checked,
+    claude_crisis: document.getElementById('claudeCrisis').checked,
+    api_key:       document.getElementById('apiKey').value||'',
+    custom_topics: [],
+  };
+}
+
+// ── Run ───────────────────────────────────────────────────────────────────────
+async function run() {
+  document.getElementById('errBox').style.display = 'none';
+  const cfg = buildConfig();
+  if (!cfg.primary_user) { showErr('Enter your name in Step 1.'); return; }
+  if (!cfg.chats.length) { showErr('Add at least one chat file with a contact name.'); return; }
+
+  setRunning(true);
+  document.getElementById('logWrap').style.display = 'block';
+  document.getElementById('log').innerHTML = '';
+
+  await pywebview.api.save_config(cfg);
+  await pywebview.api.run_analysis(cfg);
+}
+
+function setRunning(on) {
+  const b = document.getElementById('runBtn');
+  b.disabled = on;
+  b.textContent = on ? '⏳ Analysing…' : '▶ Run Analysis';
+}
+
+function appendLog(msg) {
+  const log = document.getElementById('log');
+  const d = document.createElement('div');
+  d.className = msg.includes('⚠')?'log-warn': msg.includes('✓')||msg.includes('Done')?'log-ok':'';
+  d.textContent = msg;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setError(msg)  { showErr(msg); setRunning(false); }
+function showErr(msg)   { const e=document.getElementById('errBox'); e.textContent='⚠ '+msg; e.style.display='block'; e.scrollIntoView({behavior:'smooth'}); }
+function toggleKey()    { document.getElementById('apiField').style.display = document.getElementById('claudeCrisis').checked?'block':'none'; }
+
+// ── Restore saved config on launch ───────────────────────────────────────────
+window.addEventListener('pywebviewready', async () => {
+  try {
+    const c = await pywebview.api.load_config();
+    if (!c) { addChat(); return; }
+    if (c.primary_user) document.getElementById('primaryUser').value = c.primary_user;
+    if (c.ollama_url)   document.getElementById('ollamaUrl').value   = c.ollama_url;
+    if (c.ollama_model) document.getElementById('ollamaModel').value = c.ollama_model;
+    if (c.no_ai)        document.getElementById('noAi').checked      = true;
+    if (c.api_key)      document.getElementById('apiKey').value      = c.api_key;
+    const r = document.querySelector(`[name="nlp"][value="${c.nlp_engine||'textblob'}"]`);
+    if (r) r.checked = true;
+    (c.chats||[]).length ? c.chats.forEach(addChat) : addChat();
+  } catch(e) { addChat(); }
+});
+</script>
+</body>
+</html>"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def main():
+    api = AnalyserAPI()
+    window = webview.create_window(
+        "WhatsApp Chat Analyser",
+        html=CONFIG_HTML,
+        js_api=api,
+        width=820,
+        height=800,
+        min_size=(600, 500),
+        background_color="#f0f4f8",
+    )
+    api.set_window(window)
+    webview.start(debug=False)
+
+
+if __name__ == "__main__":
+    main()
