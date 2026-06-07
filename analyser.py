@@ -1922,7 +1922,7 @@ function renderPeople(el) {{
     html+=`<div class="person-card">
       <div class="name">${{esc(name)}} <span style="font-size:12px;color:var(--muted);font-weight:400">×${{p.count}} mentions · ${{p.chats.join(", ")}}</span></div>
       ${{label?`<div class="label">${{esc(label)}}</div>`:""}}
-      <div class="person-card sentiment-bar">
+      <div class="sentiment-bar">
         <div class="sb-pos" style="width:${{sd.positive||0}}%"></div>
         <div class="sb-neu" style="width:${{sd.neutral||0}}%"></div>
         <div class="sb-neg" style="width:${{sd.negative||0}}%"></div>
