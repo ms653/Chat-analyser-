@@ -8,6 +8,8 @@ The config form and analysis output both live inside this one window.
 import os
 import sys
 import json
+import shutil
+import subprocess
 import tempfile
 import threading
 from pathlib import Path
@@ -24,9 +26,48 @@ sys.path.insert(0, _BASE)
 import analyser  # noqa: E402  (must come after path fix)
 
 # Saved config lives in home dir so it persists between runs
-CONFIG_FILE = Path.home() / ".whatsapp_analyser_config.json"
+CONFIG_FILE   = Path.home() / ".whatsapp_analyser_config.json"
 # Notes saved separately so they survive HTML regeneration
-NOTES_FILE  = Path.home() / ".whatsapp_analyser_notes.json"
+NOTES_FILE    = Path.home() / ".whatsapp_analyser_notes.json"
+# Project source directory — saved on first source run, read back when frozen
+_PROJ_PATH_FILE = Path.home() / ".whatsapp_analyser_project.txt"
+
+GITHUB_REPO = "ms653/Chat-analyser-"
+
+
+def _get_project_dir() -> Path | None:
+    """
+    Return the source project directory regardless of whether we are running
+    from source or as a frozen .app bundle.
+    """
+    if not getattr(sys, "frozen", False):
+        # Running from source — the directory containing this file
+        p = Path(os.path.abspath(__file__)).parent
+        try:
+            _PROJ_PATH_FILE.write_text(str(p))
+        except Exception:
+            pass
+        return p
+
+    # Frozen .app — try saved path first
+    try:
+        if _PROJ_PATH_FILE.exists():
+            p = Path(_PROJ_PATH_FILE.read_text().strip())
+            if p.exists() and (p / "gui.py").exists():
+                return p
+    except Exception:
+        pass
+
+    # Fall back: derive from the .app bundle path
+    # sys.executable → .../dist/WhatsApp Analyser.app/Contents/MacOS/binary
+    try:
+        p = Path(sys.executable).resolve().parents[4]
+        if (p / "gui.py").exists():
+            return p
+    except Exception:
+        pass
+
+    return None
 
 # ── Back-button toolbar injected into results HTML ───────────────────────────
 _TOOLBAR = (
@@ -121,6 +162,131 @@ class AnalyserAPI:
     def go_back(self):
         """Return to the config form from the results view."""
         self._window.load_html(CONFIG_HTML)
+
+    # ── Updates ──────────────────────────────────────────────────────────────
+
+    def get_version(self) -> dict:
+        proj = _get_project_dir()
+        if not proj or not shutil.which("git"):
+            return {"hash": "unknown", "date": "unknown"}
+        try:
+            r = subprocess.run(
+                ["git", "log", "-1", "--format=%h|%cd", "--date=short"],
+                capture_output=True, text=True, cwd=str(proj), timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                parts = r.stdout.strip().split("|")
+                return {"hash": parts[0], "date": parts[1] if len(parts) > 1 else ""}
+        except Exception:
+            pass
+        return {"hash": "unknown", "date": "unknown"}
+
+    def check_for_updates(self) -> dict:
+        proj = _get_project_dir()
+        if not proj:
+            return {"error": "Project folder not found. Run python3 gui.py once first."}
+        if not shutil.which("git"):
+            return {"error": "git not found. Install Xcode Command Line Tools via the App Store."}
+        try:
+            subprocess.run(
+                ["git", "fetch", "origin", "main"],
+                capture_output=True, cwd=str(proj), timeout=15,
+            )
+            local = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True, text=True, cwd=str(proj),
+            ).stdout.strip()
+            remote = subprocess.run(
+                ["git", "rev-parse", "origin/main"],
+                capture_output=True, text=True, cwd=str(proj),
+            ).stdout.strip()
+            if local == remote:
+                return {"available": False, "message": "You're already on the latest version."}
+            log = subprocess.run(
+                ["git", "log", "--oneline", f"{local}..origin/main"],
+                capture_output=True, text=True, cwd=str(proj),
+            ).stdout.strip()
+            count = len(log.splitlines()) if log else 0
+            return {"available": True, "count": count, "preview": log[:300]}
+        except subprocess.TimeoutExpired:
+            return {"error": "Timed out — check your internet connection."}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def do_update(self):
+        """Pull latest code and rebuild the .app. Runs in background thread."""
+        t = threading.Thread(target=self._update_worker, daemon=True)
+        t.start()
+
+    def _ulog(self, msg: str):
+        self._window.evaluate_js(f"updateLog({json.dumps(str(msg))})")
+
+    def _update_worker(self):
+        proj = _get_project_dir()
+        if not proj:
+            self._ulog("ERROR: Project folder not found.")
+            return
+        try:
+            # 1 — Pull
+            self._ulog("Pulling latest code from GitHub…")
+            r = subprocess.run(
+                ["git", "pull", "origin", "main"],
+                capture_output=True, text=True, cwd=str(proj), timeout=30,
+            )
+            if r.returncode != 0:
+                self._ulog(f"Git pull failed: {r.stderr.strip()}")
+                return
+            self._ulog(r.stdout.strip() or "Code updated.")
+
+            # 2 — Dependencies
+            self._ulog("Checking dependencies…")
+            req = proj / "requirements.txt"
+            if req.exists():
+                r2 = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r", str(req), "-q"],
+                    capture_output=True, text=True, timeout=120,
+                )
+                self._ulog("Dependencies up to date." if r2.returncode == 0
+                           else f"Dependency warning: {r2.stderr[:200]}")
+
+            # 3 — Rebuild .app
+            self._ulog("Rebuilding app — this takes about a minute…")
+            r3 = subprocess.run(
+                [
+                    sys.executable, "-m", "PyInstaller",
+                    "--windowed", "--onedir",
+                    "--name", "WhatsApp Analyser",
+                    "--hidden-import", "webview",
+                    "--hidden-import", "webview.platforms.cocoa",
+                    "--collect-all", "webview",
+                    "--noconfirm",
+                    str(proj / "gui.py"),
+                ],
+                capture_output=True, text=True, cwd=str(proj), timeout=300,
+            )
+            if r3.returncode != 0:
+                self._ulog(f"Build failed:\n{r3.stderr[-600:]}")
+                return
+
+            new_app = proj / "dist" / "WhatsApp Analyser.app"
+            if new_app.exists():
+                self._ulog("✓ Update complete!")
+                self._window.evaluate_js("updateDone()")
+            else:
+                self._ulog("Build finished but app not found — check dist/ folder.")
+        except subprocess.TimeoutExpired:
+            self._ulog("Timed out during update.")
+        except Exception as e:
+            self._ulog(f"Update error: {e}")
+
+    def relaunch(self):
+        """Open the freshly built .app and exit this instance."""
+        proj = _get_project_dir()
+        if proj:
+            new_app = proj / "dist" / "WhatsApp Analyser.app"
+            if new_app.exists():
+                subprocess.Popen(["open", str(new_app)])
+        sys.exit(0)
 
     # ── Analysis ─────────────────────────────────────────────────────────────
 
@@ -400,6 +566,24 @@ details[open] summary::before{transform:rotate(90deg)}
         </div>
       </div>
     </details>
+
+    <details id="updateSection">
+      <summary>Updates</summary>
+      <div class="detail-body">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
+          Version: <span id="versionLabel" style="font-family:monospace">…</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <button class="btn btn-ghost" style="font-size:13px" onclick="checkForUpdates()">🔍 Check for updates</button>
+          <button class="btn btn-ghost" style="font-size:13px;display:none" id="doUpdateBtn" onclick="doUpdate()">⬇ Download &amp; install</button>
+          <button class="btn btn-ghost" style="font-size:13px;display:none" id="relaunchBtn" onclick="relaunch()">🔄 Relaunch new version</button>
+        </div>
+        <div id="updateStatus" style="font-size:13px;color:var(--muted);margin-bottom:8px"></div>
+        <div id="updateLogWrap" style="display:none;background:#0f172a;border-radius:8px;padding:12px">
+          <div id="updateLog" style="font-family:monospace;font-size:12px;color:#94a3b8;max-height:180px;overflow-y:auto;line-height:1.8"></div>
+        </div>
+      </div>
+    </details>
   </div>
 
   <!-- Run -->
@@ -588,8 +772,62 @@ function setError(msg)  { showErr(msg); setRunning(false); }
 function showErr(msg)   { const e=document.getElementById('errBox'); e.textContent='⚠ '+msg; e.style.display='block'; e.scrollIntoView({behavior:'smooth'}); }
 function toggleKey()    { document.getElementById('apiField').style.display = document.getElementById('claudeCrisis').checked?'block':'none'; }
 
+// ── Updates ───────────────────────────────────────────────────────────────────
+async function checkForUpdates() {
+  document.getElementById('updateStatus').textContent = 'Checking…';
+  document.getElementById('doUpdateBtn').style.display = 'none';
+  try {
+    const result = await pywebview.api.check_for_updates();
+    if (result.error) {
+      document.getElementById('updateStatus').textContent = '⚠ ' + result.error;
+    } else if (result.available) {
+      document.getElementById('updateStatus').innerHTML =
+        `<span style="color:#059669;font-weight:600">● Update available</span> — ${result.count} new commit${result.count!==1?'s':''}<br>` +
+        `<span style="font-family:monospace;font-size:11px;color:var(--muted)">${(result.preview||'').replace(/</g,'&lt;')}</span>`;
+      document.getElementById('doUpdateBtn').style.display = 'inline-flex';
+    } else {
+      document.getElementById('updateStatus').textContent = '✓ ' + result.message;
+    }
+  } catch(e) {
+    document.getElementById('updateStatus').textContent = 'Error: ' + e;
+  }
+}
+
+async function doUpdate() {
+  document.getElementById('doUpdateBtn').style.display = 'none';
+  document.getElementById('updateLogWrap').style.display = 'block';
+  document.getElementById('updateLog').innerHTML = '';
+  document.getElementById('updateStatus').textContent = 'Updating…';
+  await pywebview.api.do_update();
+}
+
+function updateLog(msg) {
+  const log = document.getElementById('updateLog');
+  const d = document.createElement('div');
+  d.style.color = msg.includes('✓') ? '#4ade80' : msg.includes('ERROR') || msg.includes('failed') ? '#f87171' : '#94a3b8';
+  d.textContent = msg;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+function updateDone() {
+  document.getElementById('updateStatus').innerHTML = '<span style="color:#059669;font-weight:600">✓ Ready to relaunch</span>';
+  document.getElementById('relaunchBtn').style.display = 'inline-flex';
+}
+
+async function relaunch() {
+  document.getElementById('relaunchBtn').textContent = 'Relaunching…';
+  await pywebview.api.relaunch();
+}
+
 // ── Restore saved config on launch ───────────────────────────────────────────
 window.addEventListener('pywebviewready', async () => {
+  try {
+    // Load version
+    const v = await pywebview.api.get_version();
+    document.getElementById('versionLabel').textContent =
+      v.hash !== 'unknown' ? `${v.hash} · ${v.date}` : 'unknown';
+  } catch(e) {}
   try {
     const c = await pywebview.api.load_config();
     if (!c) { addChat(); return; }
