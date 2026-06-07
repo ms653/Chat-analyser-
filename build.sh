@@ -8,6 +8,9 @@ set -e
 echo "Installing build dependencies…"
 pip3 install pyinstaller pywebview --quiet
 
+echo "Embedding build SHA…"
+git rev-parse HEAD > build_sha.txt
+
 echo "Building .app…"
 pyinstaller \
   --windowed \
@@ -17,8 +20,11 @@ pyinstaller \
   --hidden-import "webview.platforms.cocoa" \
   --hidden-import "clr_loader" \
   --collect-all "webview" \
+  --add-data "build_sha.txt:." \
   --noconfirm \
   gui.py
+
+rm -f build_sha.txt
 
 echo ""
 echo "Done!  Your app is at:  dist/WhatsApp Analyser.app"

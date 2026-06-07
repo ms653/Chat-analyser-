@@ -35,6 +35,16 @@ _PROJ_PATH_FILE = Path.home() / ".whatsapp_analyser_project.txt"
 GITHUB_REPO = "ms653/Chat-analyser-"
 
 
+def _get_build_sha() -> str:
+    """Return the git SHA this .app was compiled from, or '' when running from source."""
+    if not getattr(sys, "frozen", False):
+        return ""
+    try:
+        return (Path(_BASE) / "build_sha.txt").read_text().strip()
+    except Exception:
+        return ""
+
+
 def _get_project_dir() -> Path | None:
     """
     Return the source project directory regardless of whether we are running
@@ -166,12 +176,14 @@ class AnalyserAPI:
     # ── Updates ──────────────────────────────────────────────────────────────
 
     def get_version(self) -> dict:
+        build_sha = _get_build_sha()
         proj = _get_project_dir()
         if not proj or not shutil.which("git"):
-            return {"hash": "unknown", "date": "unknown"}
+            return {"hash": build_sha[:7] if build_sha else "unknown", "date": "unknown"}
         try:
+            ref = build_sha if build_sha else "HEAD"
             r = subprocess.run(
-                ["git", "log", "-1", "--format=%h|%cd", "--date=short"],
+                ["git", "log", "-1", "--format=%h|%cd", "--date=short", ref],
                 capture_output=True, text=True, cwd=str(proj), timeout=5,
             )
             if r.returncode == 0 and r.stdout.strip():
@@ -179,7 +191,7 @@ class AnalyserAPI:
                 return {"hash": parts[0], "date": parts[1] if len(parts) > 1 else ""}
         except Exception:
             pass
-        return {"hash": "unknown", "date": "unknown"}
+        return {"hash": build_sha[:7] if build_sha else "unknown", "date": "unknown"}
 
     def check_for_updates(self) -> dict:
         proj = _get_project_dir()
@@ -200,14 +212,30 @@ class AnalyserAPI:
                 ["git", "rev-parse", "origin/main"],
                 capture_output=True, text=True, cwd=str(proj),
             ).stdout.strip()
-            if local == remote:
-                return {"available": False, "message": "You're already on the latest version."}
-            log = subprocess.run(
-                ["git", "log", "--oneline", f"{local}..origin/main"],
-                capture_output=True, text=True, cwd=str(proj),
-            ).stdout.strip()
-            count = len(log.splitlines()) if log else 0
-            return {"available": True, "count": count, "preview": log[:300]}
+
+            # Pull any remote commits that haven't landed locally yet
+            if local != remote:
+                subprocess.run(
+                    ["git", "pull", "origin", "main"],
+                    capture_output=True, cwd=str(proj), timeout=30,
+                )
+                local = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    capture_output=True, text=True, cwd=str(proj),
+                ).stdout.strip()
+
+            # Compare the running .app's baked-in SHA against the current source
+            build_sha = _get_build_sha()
+            if build_sha and build_sha != local:
+                log = subprocess.run(
+                    ["git", "log", "--oneline", f"{build_sha}..HEAD"],
+                    capture_output=True, text=True, cwd=str(proj),
+                ).stdout.strip()
+                count = len(log.splitlines()) if log else 1
+                return {"available": True, "count": count, "preview": log[:300]}
+
+            # Running from source, or app already built from latest
+            return {"available": False, "message": "You're already on the latest version."}
         except subprocess.TimeoutExpired:
             return {"error": "Timed out — check your internet connection."}
         except Exception as e:
@@ -227,7 +255,7 @@ class AnalyserAPI:
             self._ulog("ERROR: Project folder not found.")
             return
         try:
-            # 1 — Pull
+            # 1 — Pull (already done in check_for_updates, but safe to repeat)
             self._ulog("Pulling latest code from GitHub…")
             r = subprocess.run(
                 ["git", "pull", "origin", "main"],
@@ -236,7 +264,7 @@ class AnalyserAPI:
             if r.returncode != 0:
                 self._ulog(f"Git pull failed: {r.stderr.strip()}")
                 return
-            self._ulog(r.stdout.strip() or "Code updated.")
+            self._ulog(r.stdout.strip() or "Already at latest — rebuilding.")
 
             # 2 — Dependencies
             self._ulog("Checking dependencies…")
@@ -249,7 +277,18 @@ class AnalyserAPI:
                 self._ulog("Dependencies up to date." if r2.returncode == 0
                            else f"Dependency warning: {r2.stderr[:200]}")
 
-            # 3 — Rebuild .app
+            # 3 — Write build SHA so the new .app knows what it was built from
+            sha_file = proj / "build_sha.txt"
+            try:
+                current_sha = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    capture_output=True, text=True, cwd=str(proj),
+                ).stdout.strip()
+                sha_file.write_text(current_sha)
+            except Exception:
+                pass
+
+            # 4 — Rebuild .app
             self._ulog("Rebuilding app — this takes about a minute…")
             r3 = subprocess.run(
                 [
@@ -259,11 +298,17 @@ class AnalyserAPI:
                     "--hidden-import", "webview",
                     "--hidden-import", "webview.platforms.cocoa",
                     "--collect-all", "webview",
+                    "--add-data", "build_sha.txt:.",
                     "--noconfirm",
                     str(proj / "gui.py"),
                 ],
                 capture_output=True, text=True, cwd=str(proj), timeout=300,
             )
+            try:
+                sha_file.unlink()
+            except Exception:
+                pass
+
             if r3.returncode != 0:
                 self._ulog(f"Build failed:\n{r3.stderr[-600:]}")
                 return
