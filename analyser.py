@@ -468,6 +468,33 @@ def compute_daily_sentiment(chat: dict) -> dict:
     return {"user": user_series, "contact": contact_series}
 
 
+def compute_weekly_volume(chat: dict) -> dict:
+    """Message count per ISO week per sender."""
+    user_by_week: dict = defaultdict(int)
+    contact_by_week: dict = defaultdict(int)
+    for msg in chat["messages"]:
+        d = msg["date"]
+        if not d:
+            continue
+        if isinstance(d, str):
+            try:
+                d = datetime.date.fromisoformat(d)
+            except ValueError:
+                continue
+        iso = d.isocalendar()
+        week_key = f"{iso[0]}-W{iso[1]:02d}"
+        if msg["is_user"]:
+            user_by_week[week_key] += 1
+        else:
+            contact_by_week[week_key] += 1
+    all_weeks = sorted(set(list(user_by_week.keys()) + list(contact_by_week.keys())))
+    return {
+        "weeks": all_weeks,
+        "user": [user_by_week.get(w, 0) for w in all_weeks],
+        "contact": [contact_by_week.get(w, 0) for w in all_weeks],
+    }
+
+
 TOPIC_KEYWORDS = {
     "family_conflict": ["argument", "fight", "angry", "upset", "shouting", "screaming", "row", "fallout", "falling out"],
     "housing": ["house", "flat", "rent", "mortgage", "move", "landlord", "neighbour", "garden", "heating"],
@@ -563,6 +590,7 @@ def run_per_chat_analysis(chat: dict, engine: str, custom_topics: list) -> None:
         "initiation_balance": compute_initiation_balance(chat),
         "response_times": compute_response_times(chat),
         "daily_sentiment": compute_daily_sentiment(chat),
+        "weekly_volume": compute_weekly_volume(chat),
         "topics": compute_topics(chat, custom_topics),
         "people": extract_person_mentions(chat),
         "distress_signals": [
@@ -898,6 +926,7 @@ def generate_html(
             "initiation_balance": a["initiation_balance"],
             "response_times": a["response_times"],
             "daily_sentiment": a["daily_sentiment"],
+            "weekly_volume": a["weekly_volume"],
             "topics": a["topics"],
             "distress_signals": a["distress_signals"],
             "crisis_flags": a["crisis_flags"],
@@ -1009,8 +1038,13 @@ a{{color:var(--contact)}}
 .crisis-content{{display:none}}
 .crisis-safe{{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--radius);padding:14px;font-size:14px;margin-top:16px}}
 .no-data{{color:var(--muted);font-size:14px;text-align:center;padding:32px}}
-textarea.note{{width:100%;border:1px solid var(--border);border-radius:var(--radius);padding:8px;font-size:13px;resize:vertical;min-height:60px;margin-top:8px}}
+.note-section{{margin-top:16px;border-top:2px dashed #e2e8f0;padding-top:12px}}
+.note-label{{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px}}
+textarea.note{{width:100%;border:2px dashed #d1d5db;border-radius:var(--radius);padding:10px 12px;font-size:13px;resize:vertical;min-height:80px;background:#fefce8;color:var(--text);font-family:inherit;line-height:1.6;transition:border-color .15s,background .15s;outline:none}}
+textarea.note:focus{{border-color:#f59e0b;background:#fff}}
+textarea.note:not(:placeholder-shown){{background:#fffbeb;border-color:#d97706;border-style:solid}}
 .chart-wrap{{position:relative;height:280px;margin-bottom:16px}}
+.chart-wrap-sm{{position:relative;height:200px;margin-bottom:8px}}
 .tag{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--bg);border:1px solid var(--border);margin-right:4px}}
 .cross-chat-card{{border-left:4px solid var(--warn);padding:12px 16px;background:var(--surface);border-radius:0 var(--radius) var(--radius) 0;margin-bottom:10px;font-size:13px}}
 @media(max-width:600px){{
@@ -1100,6 +1134,23 @@ function makeLineChart(canvasId, labels, datasets) {{
       scales:{{
         x:{{ticks:{{maxTicksLimit:12,maxRotation:45}}}},
         y:{{min:-1,max:1,ticks:{{stepSize:0.5}}}}
+      }}
+    }}
+  }});
+}}
+function makeBarChart(canvasId, labels, datasets, opts) {{
+  destroyChart(canvasId);
+  const ctx = document.getElementById(canvasId);
+  if(!ctx) return;
+  charts[canvasId] = new Chart(ctx,{{
+    type:"bar",
+    data:{{labels,datasets}},
+    options:{{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{{legend:{{position:"top"}},tooltip:{{mode:"index"}}}},
+      scales:{{
+        x:{{stacked:false,ticks:{{maxTicksLimit:16,maxRotation:45}}}},
+        y:{{beginAtZero:true,...(opts||{{}})}}
       }}
     }}
   }});
@@ -1297,7 +1348,10 @@ function renderTimeline(el, chat) {{
         <div class="bubble-inner">${{esc(m.text)}}</div>
       </div>`;
     }});
-    html+=`<textarea class="note" placeholder="Add a note for ${{fmt(date)}}…" onchange="saveNote('${{chat.id}}','${{date}}',this.value)">${{esc(loadNote(chat.id,date))}}</textarea>`;
+    html+=`<div class="note-section">
+      <div class="note-label"><span>📝</span> Your private notes — saved in this browser only</div>
+      <textarea class="note" placeholder="Add context, reflections, or anything worth remembering about this day…" onchange="saveNote('${{chat.id}}','${{date}}',this.value)">${{esc(loadNote(chat.id,date))}}</textarea>
+    </div>`;
     html+=`</div>`;
   }});
   html+=`</div>`;
@@ -1376,30 +1430,80 @@ function renderVisits(el, chat) {{
 
 // ── Sentiment chart ────────────────────────────────────────────────────────
 function renderSentimentChart(el, chats) {{
-  const canvasId="sentChart";
-  el.innerHTML=`<div class="card"><h2>Sentiment over time</h2><div class="chart-wrap"><canvas id="${{canvasId}}"></canvas></div></div>`;
+  el.innerHTML=`
+    <div class="card">
+      <h2>Mood over time</h2>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">
+        Score runs from <b>−1</b> (most negative) through <b>0</b> (neutral) to <b>+1</b> (most positive).
+        Plotted as a 7-day rolling average to smooth day-to-day noise.
+        Solid line = you &nbsp;|&nbsp; Dashed line = contact.
+      </p>
+      <div class="chart-wrap"><canvas id="sentChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Message volume</h2>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">
+        Number of messages sent per week by each person.
+        Gaps or sudden drops often indicate a period of silence or conflict.
+      </p>
+      <div class="chart-wrap-sm"><canvas id="volChart"></canvas></div>
+    </div>`;
+
   const colors=["#25D366","#1a73e8","#e91e63","#ff9800","#9c27b0"];
   const colorsDash=["#25D366cc","#1a73e8cc","#e91e63cc","#ff9800cc","#9c27b0cc"];
-  const datasets=[];
+
+  // ── Mood chart ──────────────────────────────────────────────────────────
+  const sentDatasets=[];
   const allDates=[...new Set(chats.flatMap(c=>Object.keys(c.daily_sentiment.user||{{}}).concat(Object.keys(c.daily_sentiment.contact||{{}}))))].sort();
   chats.forEach((chat,i)=>{{
     const userAvg=rollingAvg(chat.daily_sentiment.user||{{}});
     const contAvg=rollingAvg(chat.daily_sentiment.contact||{{}});
-    const uData=allDates.map(d=>userAvg[d]??null);
-    const cData=allDates.map(d=>contAvg[d]??null);
     const label=chats.length>1?chat.name:"";
-    datasets.push({{
-      label:label?`You (${{label}})`:"You",data:uData,
+    sentDatasets.push({{
+      label:label?`You (${{label}})`:"You",
+      data:allDates.map(d=>userAvg[d]??null),
       borderColor:colors[i%colors.length],backgroundColor:colors[i%colors.length]+"22",
       borderWidth:2,pointRadius:1,spanGaps:true,tension:.3
     }});
-    datasets.push({{
-      label:label?`${{chat.name}} (${{chat.name}})`:`${{chat.name}}`,data:cData,
+    sentDatasets.push({{
+      label:label?chat.name:chat.name,
+      data:allDates.map(d=>contAvg[d]??null),
       borderColor:colorsDash[i%colorsDash.length],backgroundColor:"transparent",
       borderWidth:2,borderDash:[4,4],pointRadius:1,spanGaps:true,tension:.3
     }});
   }});
-  requestAnimationFrame(()=>makeLineChart(canvasId,allDates,datasets));
+  requestAnimationFrame(()=>makeLineChart("sentChart",allDates,sentDatasets));
+
+  // ── Volume chart ─────────────────────────────────────────────────────────
+  const volDatasets=[];
+  // Merge all weeks across chats
+  const allWeeks=[...new Set(chats.flatMap(c=>(c.weekly_volume&&c.weekly_volume.weeks)||[]))].sort();
+  const barColors=["rgba(37,211,102,.7)","rgba(26,115,232,.7)","rgba(233,30,99,.7)","rgba(255,152,0,.7)"];
+  const barColorsContact=["rgba(37,211,102,.35)","rgba(26,115,232,.35)","rgba(233,30,99,.35)","rgba(255,152,0,.35)"];
+  chats.forEach((chat,i)=>{{
+    if(!chat.weekly_volume||!chat.weekly_volume.weeks) return;
+    const wkMap={{}};
+    chat.weekly_volume.weeks.forEach((w,j)=>{{
+      wkMap[w]={{u:chat.weekly_volume.user[j],c:chat.weekly_volume.contact[j]}};
+    }});
+    const label=chats.length>1?chat.name:"";
+    volDatasets.push({{
+      label:label?`You (${{label}})`:"You",
+      data:allWeeks.map(w=>wkMap[w]?wkMap[w].u:0),
+      backgroundColor:barColors[i%barColors.length],borderRadius:3,borderWidth:0
+    }});
+    volDatasets.push({{
+      label:label?chat.name:chat.name,
+      data:allWeeks.map(w=>wkMap[w]?wkMap[w].c:0),
+      backgroundColor:barColorsContact[i%barColorsContact.length],borderRadius:3,borderWidth:0
+    }});
+  }});
+  // Thin x-axis labels for volume — show every nth week
+  const volLabels=allWeeks.map((w,i)=>{{
+    const step=allWeeks.length>104?8:allWeeks.length>52?4:allWeeks.length>26?2:1;
+    return i%step===0?w:"";
+  }});
+  requestAnimationFrame(()=>makeBarChart("volChart",volLabels,volDatasets));
 }}
 
 // ── Initiation balance ─────────────────────────────────────────────────────

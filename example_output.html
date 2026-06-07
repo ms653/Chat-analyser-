@@ -13,7 +13,7 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:15px;line-height:1.6}
-.header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}
+.header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}
 .header h1{font-size:18px;font-weight:700}
 .header .meta{color:var(--muted);font-size:13px}
 .example-banner{background:#fef3c7;border-bottom:1px solid #fcd34d;padding:10px 24px;font-size:13px;text-align:center}
@@ -24,17 +24,15 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .tab-btn{padding:12px 18px;border:none;background:transparent;cursor:pointer;font-size:14px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s}
 .tab-btn.active{color:var(--contact);border-bottom-color:var(--contact)}
 .main{max-width:1200px;margin:0 auto;padding:24px}
-.panel{display:none}.panel.active{display:block}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;box-shadow:var(--shadow)}
-.card h2{font-size:16px;font-weight:700;margin-bottom:12px;color:var(--text)}
-.card h3{font-size:14px;font-weight:600;margin-bottom:8px;color:var(--text)}
+.card h2{font-size:16px;font-weight:700;margin-bottom:12px}
+.card h3{font-size:14px;font-weight:600;margin-bottom:8px}
 .stat-row{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px}
 .stat{background:var(--bg);border-radius:var(--radius);padding:14px 18px;flex:1;min-width:120px;text-align:center}
 .stat .val{font-size:28px;font-weight:700}
 .stat .lbl{font-size:12px;color:var(--muted);margin-top:4px}
 .stat.ok .val{color:var(--ok)}
 .stat.warn .val{color:var(--warn)}
-.stat.danger .val{color:var(--danger)}
 .bubble-day{margin-bottom:20px}
 .day-label{font-size:12px;color:var(--muted);text-align:center;margin-bottom:8px;font-weight:600}
 .bubble{display:flex;margin-bottom:6px}
@@ -47,7 +45,11 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .badge.visit_offered{background:#dbeafe;color:#1e40af}
 .badge.visit_cancelled{background:#fed7aa;color:#9a3412}
 .badge.visit_happened{background:#dcfce7;color:#166534}
-.badge.financial{background:#f3e8ff;color:#6b21a8}
+.note-section{margin-top:16px;border-top:2px dashed #e2e8f0;padding-top:12px}
+.note-label{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px}
+textarea.note{width:100%;border:2px dashed #d1d5db;border-radius:var(--radius);padding:10px 12px;font-size:13px;resize:vertical;min-height:80px;background:#fefce8;color:var(--text);font-family:inherit;line-height:1.6;outline:none;transition:border-color .15s,background .15s}
+textarea.note:focus{border-color:#f59e0b;background:#fff}
+textarea.note:not(:placeholder-shown){background:#fffbeb;border-color:#d97706;border-style:solid}
 .bar{height:20px;border-radius:4px;display:flex;overflow:hidden;margin-bottom:8px}
 .bar-user{background:var(--user)}
 .bar-contact{background:var(--contact)}
@@ -55,434 +57,529 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .timeline-event{padding:10px 14px;border-left:3px solid var(--border);margin-bottom:8px;font-size:13px}
 .timeline-event.positive{border-color:var(--ok)}
 .timeline-event.warning{border-color:var(--warn)}
-.timeline-event.crisis{border-color:var(--danger)}
 .timeline-event .event-date{font-size:11px;color:var(--muted);margin-bottom:4px}
-.person-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.person-card{border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
 .person-card .name{font-weight:700;font-size:15px;margin-bottom:4px}
 .person-card .label{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;background:var(--bg);border:1px solid var(--border);margin-bottom:8px}
-.person-card .sentiment-bar-wrap{display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:4px}
-.sb-pos{background:var(--ok)}
-.sb-neu{background:var(--border)}
-.sb-neg{background:var(--danger)}
+.sb-wrap{display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:4px}
+.sb-pos{background:var(--ok)}.sb-neu{background:var(--border)}.sb-neg{background:var(--danger)}
 .contrast-pair{border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px}
-.contrast-pair .claimed{color:var(--muted);font-size:13px;margin-bottom:6px}
-.contrast-pair .claimed::before{content:"💬 Claimed: ";font-weight:600;color:var(--text)}
-.contrast-pair .record{color:var(--text);font-size:13px}
-.contrast-pair .record::before{content:"📊 Record shows: ";font-weight:600}
+.claimed{color:var(--muted);font-size:13px;margin-bottom:6px}
+.claimed::before{content:"💬 Claimed: ";font-weight:600;color:var(--text)}
+.record{color:var(--text);font-size:13px}
+.record::before{content:"📊 Record shows: ";font-weight:600}
 .fw-item{border-left:3px solid var(--contact);padding:8px 12px;margin-bottom:10px;font-size:13px}
-.fw-item .fw-original{font-weight:600;margin-bottom:4px}
-.fw-item .fw-suggestion{color:var(--contact);margin-bottom:2px}
-.fw-item .fw-basis{color:var(--muted);font-size:12px;font-style:italic}
+.fw-original{font-weight:600;margin-bottom:4px}
+.fw-suggestion{color:var(--contact);margin-bottom:2px}
+.fw-basis{color:var(--muted);font-size:12px;font-style:italic}
 .visit-event{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
 .visit-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-.visit-dot.offered{background:var(--contact)}
-.visit-dot.accepted{background:var(--ok)}
-.visit-dot.cancelled{background:var(--warn)}
-.visit-dot.happened{background:var(--ok)}
+.visit-dot.offered{background:var(--contact)}.visit-dot.cancelled{background:var(--warn)}.visit-dot.happened{background:var(--ok)}
+.cross-chat-card{border-left:4px solid var(--warn);padding:12px 16px;border-radius:0 var(--radius) var(--radius) 0;margin-bottom:10px;font-size:13px}
 .chart-wrap{position:relative;height:280px;margin-bottom:16px}
+.chart-wrap-sm{position:relative;height:200px;margin-bottom:8px}
+.no-data{color:var(--muted);font-size:14px;text-align:center;padding:32px}
 .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--bg);border:1px solid var(--border);margin-right:4px}
-.cross-chat-card{border-left:4px solid var(--warn);padding:12px 16px;background:var(--surface);border-radius:0 var(--radius) var(--radius) 0;margin-bottom:10px;font-size:13px}
-textarea.note{width:100%;border:1px solid var(--border);border-radius:var(--radius);padding:8px;font-size:13px;resize:vertical;min-height:60px;margin-top:8px}
-.crisis-safe{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--radius);padding:14px;font-size:14px;margin-top:16px}
-@media(max-width:600px){
-  .stat-row{gap:8px}.stat{min-width:90px;padding:10px}
-  .bubble-inner{max-width:82%}
-}
 </style>
 </head>
 <body>
 
 <div class="header">
-  <div>
-    <h1>WhatsApp Analysis — Alex Sample</h1>
-    <div class="meta">1 Jan 2024 – 31 May 2024 &middot; 1,847 messages across 2 chats</div>
-  </div>
+  <h1>WhatsApp Analysis — Alex Sample</h1>
+  <div class="meta">1 Jan 2024 – 31 May 2024 &middot; 1,847 messages across 2 chats</div>
 </div>
-
 <div class="example-banner">
-  ⚠️ This is an <strong>example output</strong> with fully anonymised, synthetic data. Run <code>python analyser.py</code> with real chat exports to generate your own report.
+  ⚠️ This is an <strong>example output</strong> with fully anonymised, synthetic data. Run <code>python analyser.py</code> with real exports to generate your own.
 </div>
 
-<div class="chat-selector">
-  <button class="chat-btn" onclick="showPanel('single')" id="btn-single">Contact A</button>
-  <button class="chat-btn" onclick="showPanel('all')" id="btn-all">Contact B</button>
-  <button class="chat-btn active" onclick="showPanel('overview')" id="btn-overview">All conversations</button>
-</div>
-
-<div class="tabs" id="tabBar">
-  <button class="tab-btn active" onclick="showTab('conversations')">Conversations</button>
-  <button class="tab-btn" onclick="showTab('timeline')">Timeline</button>
-  <button class="tab-btn" onclick="showTab('visits')">Visits &amp; Availability</button>
-  <button class="tab-btn" onclick="showTab('sentiment')">Sentiment</button>
-  <button class="tab-btn" onclick="showTab('initiation')">Initiation Balance</button>
-  <button class="tab-btn" onclick="showTab('people')">People &amp; Sentiment</button>
-  <button class="tab-btn" onclick="showTab('narrative')">Narrative vs Record</button>
-  <button class="tab-btn" onclick="showTab('framework')">Communications Framework</button>
-</div>
-
-<div class="main">
-
-  <!-- CONVERSATIONS -->
-  <div id="tab-conversations" class="panel active">
-    <div class="card">
-      <h2>Conversations overview</h2>
-
-      <div style="border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
-        <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:8px">
-          <div>
-            <b>Contact A</b>
-            <span class="tag">family</span>
-            <span class="tag">primary</span>
-            <div style="color:var(--muted);font-size:12px">Family member &middot; 1,204 messages</div>
-          </div>
-          <div style="font-size:13px;color:var(--muted)">
-            Distress signals: <b>12</b> &nbsp; Crisis flags: <b>2</b>
-          </div>
-        </div>
-        <div style="margin-top:12px">
-          <div class="bar-label"><span>Initiation: You 73%</span><span>Them 27%</span></div>
-          <div class="bar"><div class="bar-user" style="width:73%"></div><div class="bar-contact" style="width:27%"></div></div>
-        </div>
-        <div style="font-size:13px;margin-top:8px">
-          Visits: 9 offered &nbsp; 4 happened &nbsp; 5 cancelled
-        </div>
-      </div>
-
-      <div style="border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
-        <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:8px">
-          <div>
-            <b>Contact B</b>
-            <span class="tag">family</span>
-            <div style="color:var(--muted);font-size:12px">Family member &middot; 643 messages</div>
-          </div>
-          <div style="font-size:13px;color:var(--muted)">
-            Distress signals: <b>3</b> &nbsp; Crisis flags: <b>0</b>
-          </div>
-        </div>
-        <div style="margin-top:12px">
-          <div class="bar-label"><span>Initiation: You 51%</span><span>Them 49%</span></div>
-          <div class="bar"><div class="bar-user" style="width:51%"></div><div class="bar-contact" style="width:49%"></div></div>
-        </div>
-        <div style="font-size:13px;margin-top:8px">
-          Visits: 4 offered &nbsp; 3 happened &nbsp; 1 cancelled
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Cross-chat pattern links <span style="font-size:12px;font-weight:400;color:var(--muted)">(AI-generated)</span></h2>
-      <div class="cross-chat-card">
-        <div style="font-weight:600;margin-bottom:4px">Late Feb 2024 — Contact A &amp; Contact B</div>
-        <div>Distress signals in the Contact A chat coincide with Contact B referencing the same named person ("David") with increased negative sentiment over a 3-day window.</div>
-        <div style="color:var(--muted);font-size:12px;margin-top:4px">Suggests a shared family stressor may have triggered parallel conversations.</div>
-      </div>
-      <div class="cross-chat-card">
-        <div style="font-weight:600;margin-bottom:4px">April 2024 — Contact A &amp; Contact B</div>
-        <div>Both chats show a 2-week silence from Contact A / Contact B simultaneously, then resumed within 24 hours of each other.</div>
-        <div style="color:var(--muted);font-size:12px;margin-top:4px">May indicate an external event affecting both simultaneously.</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Key timeline moments <span style="font-size:12px;font-weight:400;color:var(--muted)">(AI-generated)</span></h2>
-      <div class="timeline-event warning">
-        <div class="event-date">14 Feb 2024 — Contact A</div>
-        <div>Significant distress signal followed by 11-day gap with no response to three follow-up messages.</div>
-      </div>
-      <div class="timeline-event positive">
-        <div class="event-date">3 Mar 2024 — Contact A</div>
-        <div>First confirmed visit in 7 weeks; post-visit messages strongly positive from both sides.</div>
-      </div>
-      <div class="timeline-event warning">
-        <div class="event-date">22 Mar 2024 — Contact A</div>
-        <div>Visit cancelled day-of after being confirmed the previous evening; no reason given.</div>
-      </div>
-      <div class="timeline-event positive">
-        <div class="event-date">10 Apr 2024 — Contact B</div>
-        <div>Longest sustained positive exchange in the dataset — 3 days of consistent back-and-forth with high sentiment scores.</div>
-      </div>
-      <div class="timeline-event warning">
-        <div class="event-date">28 Apr 2024 — Contact A</div>
-        <div>"David" mentioned with strongly negative language; same name appears in Contact B chat 2 days later.</div>
-      </div>
-      <div class="timeline-event normal">
-        <div class="event-date">15 May 2024 — Contact A</div>
-        <div>Initiation balance shifted — Contact A initiated 3 exchanges in a week, compared to average of &lt;1/month.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- TIMELINE -->
-  <div id="tab-timeline" class="panel">
-    <div class="card">
-      <h2>Message timeline — Contact A (sample)</h2>
-      <div class="bubble-day">
-        <div class="day-label">3 March 2024 <span class="badge visit_happened">✓ visit</span></div>
-        <div class="bubble contact"><div class="bubble-inner">Just got on the train. Was so lovely to see you today, thank you for having me over.</div></div>
-        <div class="bubble user"><div class="bubble-inner">So glad you came! Let's do it again soon — it really was a good day.</div></div>
-        <div class="bubble contact"><div class="bubble-inner">Yes. I needed it. You don't know how much it means.</div></div>
-        <textarea class="note" placeholder="Add a note for 3 Mar 2024…"></textarea>
-      </div>
-      <div class="bubble-day">
-        <div class="day-label">22 March 2024 <span class="badge visit_cancelled">visit cancelled</span></div>
-        <div class="bubble user"><div class="bubble-inner">Still on for Sunday? I was going to head over around noon.</div></div>
-        <div class="bubble contact"><div class="bubble-inner">Actually I'm not feeling great. Think I'll have to leave it this time.</div></div>
-        <div class="bubble user"><div class="bubble-inner">No problem at all, hope you feel better soon. Let me know when you're up for it.</div></div>
-        <div class="bubble contact"><div class="bubble-inner">Thanks. Sorry.</div></div>
-        <textarea class="note" placeholder="Add a note for 22 Mar 2024…"></textarea>
-      </div>
-      <div class="bubble-day">
-        <div class="day-label">14 February 2024 <span class="badge distress">distress</span></div>
-        <div class="bubble contact"><div class="bubble-inner">I just feel like nobody really cares whether I'm here or not. Not really.</div></div>
-        <div class="bubble user"><div class="bubble-inner">That's not true at all. I care. Can I call you tonight?</div></div>
-        <textarea class="note" placeholder="Add a note for 14 Feb 2024…"></textarea>
-      </div>
-    </div>
-  </div>
-
-  <!-- VISITS -->
-  <div id="tab-visits" class="panel">
-    <div class="card">
-      <h2>Visits &amp; Availability — Contact A</h2>
-      <div class="stat-row">
-        <div class="stat"><div class="val" style="color:var(--contact)">9</div><div class="lbl">Offered</div></div>
-        <div class="stat ok"><div class="val">4</div><div class="lbl">Happened</div></div>
-        <div class="stat warn"><div class="val">5</div><div class="lbl">Cancelled</div></div>
-        <div class="stat"><div class="val">2</div><div class="lbl">Accepted</div></div>
-      </div>
-      <div style="font-size:13px;margin-bottom:12px">Cancellations by: <b>Contact A</b>: 4 &nbsp; <b>You</b>: 1</div>
-      <h3>Event log</h3>
-      <div class="visit-event"><div class="visit-dot offered"></div><div style="color:var(--muted);font-size:12px;min-width:90px">5 Jan 2024</div><div><b>Offered</b> by You</div></div>
-      <div class="visit-event"><div class="visit-dot cancelled"></div><div style="color:var(--muted);font-size:12px;min-width:90px">6 Jan 2024</div><div><b>Cancelled</b> by Contact A</div></div>
-      <div class="visit-event"><div class="visit-dot offered"></div><div style="color:var(--muted);font-size:12px;min-width:90px">20 Jan 2024</div><div><b>Offered</b> by You</div></div>
-      <div class="visit-event"><div class="visit-dot accepted"></div><div style="color:var(--muted);font-size:12px;min-width:90px">21 Jan 2024</div><div><b>Accepted</b> by Contact A</div></div>
-      <div class="visit-event"><div class="visit-dot happened"></div><div style="color:var(--muted);font-size:12px;min-width:90px">27 Jan 2024</div><div><b>✓ Happened</b></div></div>
-      <div class="visit-event"><div class="visit-dot offered"></div><div style="color:var(--muted);font-size:12px;min-width:90px">14 Feb 2024</div><div><b>Offered</b> by You</div></div>
-      <div class="visit-event"><div class="visit-dot cancelled"></div><div style="color:var(--muted);font-size:12px;min-width:90px">14 Feb 2024</div><div><b>Cancelled</b> by Contact A</div></div>
-      <div class="visit-event"><div class="visit-dot offered"></div><div style="color:var(--muted);font-size:12px;min-width:90px">28 Feb 2024</div><div><b>Offered</b> by You</div></div>
-      <div class="visit-event"><div class="visit-dot happened"></div><div style="color:var(--muted);font-size:12px;min-width:90px">3 Mar 2024</div><div><b>✓ Happened</b></div></div>
-      <div class="visit-event"><div class="visit-dot offered"></div><div style="color:var(--muted);font-size:12px;min-width:90px">18 Mar 2024</div><div><b>Offered</b> by You</div></div>
-      <div class="visit-event"><div class="visit-dot cancelled"></div><div style="color:var(--muted);font-size:12px;min-width:90px">22 Mar 2024</div><div><b>Cancelled</b> by Contact A</div></div>
-    </div>
-  </div>
-
-  <!-- SENTIMENT -->
-  <div id="tab-sentiment" class="panel">
-    <div class="card">
-      <h2>Sentiment over time</h2>
-      <div class="chart-wrap"><canvas id="sentChart"></canvas></div>
-    </div>
-  </div>
-
-  <!-- INITIATION -->
-  <div id="tab-initiation" class="panel">
-    <div class="card">
-      <h2>Initiation Balance</h2>
-      <h3>Contact A</h3>
-      <div class="bar-label"><span>You: 73% (214 exchanges)</span><span>Contact A: 27% (79 exchanges)</span></div>
-      <div class="bar"><div class="bar-user" style="width:73%"></div><div class="bar-contact" style="width:27%"></div></div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:20px">Trend: stable (no significant shift in last 60 days)</div>
-
-      <h3>Contact B</h3>
-      <div class="bar-label"><span>You: 51% (62 exchanges)</span><span>Contact B: 49% (60 exchanges)</span></div>
-      <div class="bar"><div class="bar-user" style="width:51%"></div><div class="bar-contact" style="width:49%"></div></div>
-      <div style="font-size:12px;color:var(--muted)">Trend: stable</div>
-    </div>
-  </div>
-
-  <!-- PEOPLE -->
-  <div id="tab-people" class="panel">
-    <div class="card">
-      <h2>People &amp; Sentiment <span style="font-size:12px;font-weight:400;color:var(--muted)">(AI-generated summaries)</span></h2>
-      <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Cards are editable — your changes are saved in your browser.</p>
-
-      <div class="person-card">
-        <div class="name">David <span style="font-size:12px;color:var(--muted);font-weight:400">×24 mentions · Contact A, Contact B</span></div>
-        <div class="label">Contested figure — mixed sentiment</div>
-        <div class="sentiment-bar-wrap">
-          <div class="sb-pos" style="width:28%"></div>
-          <div class="sb-neu" style="width:32%"></div>
-          <div class="sb-neg" style="width:40%"></div>
-        </div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">+28% / =32% / -40%</div>
-        <div style="background:#fef3c7;border-radius:4px;padding:8px;font-size:12px;margin-bottom:8px">⚠ Negative mentions cluster around specific dates and appear in both chats, suggesting a recurring source of tension rather than isolated incidents.</div>
-        <div style="font-size:13px;margin-bottom:8px">The author discusses David with noticeable ambivalence — warm references to shared history sit alongside frustration at recent behaviour. The pattern suggests an ongoing relationship under strain. Appears as a shared topic across both contacts.</div>
-        <textarea class="note" placeholder="Add your own notes about David…"></textarea>
-        <details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">Show message excerpts</summary>
-          <div style="margin-top:8px">
-            <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">"David hasn't called in three weeks. I don't know what I've done."</div>
-            <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">"Saw David yesterday — it was actually really nice. Like old times."</div>
-            <div style="padding:6px 0;font-size:13px">"David's being very difficult about the whole thing. It's exhausting."</div>
-          </div>
-        </details>
-      </div>
-
-      <div class="person-card">
-        <div class="name">Sarah <span style="font-size:12px;color:var(--muted);font-weight:400">×11 mentions · Contact A</span></div>
-        <div class="label">Supportive presence</div>
-        <div class="sentiment-bar-wrap">
-          <div class="sb-pos" style="width:72%"></div>
-          <div class="sb-neu" style="width:23%"></div>
-          <div class="sb-neg" style="width:5%"></div>
-        </div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">+72% / =23% / -5%</div>
-        <div style="font-size:13px;margin-bottom:8px">Sarah is consistently referenced in positive terms — the author describes her as reliable and caring. She appears to provide practical and emotional support to Contact A. No notable negative patterns.</div>
-        <textarea class="note" placeholder="Add your own notes about Sarah…"></textarea>
-      </div>
-    </div>
-  </div>
-
-  <!-- NARRATIVE VS RECORD -->
-  <div id="tab-narrative" class="panel">
-    <div class="card">
-      <h2>Narrative vs Record — Contact A <span style="font-size:12px;font-weight:400;color:var(--muted)">(AI-generated)</span></h2>
-      <div class="contrast-pair">
-        <div class="claimed">Contact A has expressed feeling cut off and that no one makes the effort to see them.</div>
-        <div class="record">You offered 9 visits over 5 months; 5 were cancelled by Contact A. Contact A has initiated 0 visit offers.</div>
-      </div>
-      <div class="contrast-pair">
-        <div class="claimed">Contact A has described feeling "invisible" and that people don't reach out.</div>
-        <div class="record">73% of conversation exchanges are initiated by you. Contact A initiates roughly 1 in 4 exchanges.</div>
-      </div>
-      <div class="contrast-pair">
-        <div class="claimed">Contact A has suggested visits "always fall apart" without specifying why.</div>
-        <div class="record">Of 5 cancellations, 4 were by Contact A, typically on the day. 1 was by you (advance notice given).</div>
-      </div>
-      <div class="contrast-pair">
-        <div class="claimed">Contact A described March as "a difficult month with nothing good in it."</div>
-        <div class="record">The 3 March visit generated the highest positive sentiment scores of the 5-month dataset from both parties.</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Cross-chat discrepancies</h2>
-      <div class="cross-chat-card">
-        <div style="font-weight:600">Late April 2024 — Contact A &amp; Contact B</div>
-        <div>Contact A stated to you that they "hadn't spoken to anyone in weeks." Contact B mentioned speaking with Contact A "just yesterday" around the same date.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- FRAMEWORK -->
-  <div id="tab-framework" class="panel">
-    <div class="card">
-      <h2>Communications Framework — Contact A</h2>
-      <pre style="white-space:pre-wrap;font-size:13px;line-height:1.7;margin-bottom:16px;padding:16px;background:var(--bg);border-radius:var(--radius)">## Core principle
-Prioritise consistency over intensity. Regular small contact is more effective than occasional large gestures.
-
-## Initiation
-Aim to initiate 1 in 2 exchanges in the near term, with the goal of shifting toward 1 in 3 over time.
-
-## When they express distress
-Acknowledge before anything else. Do not problem-solve in the same message. Follow up the next day.
-
-## When plans fall through
-Note it without comment. Do not reschedule in the same message. Wait 2–3 days.
-
-## When you need to set a limit
-Use "I find it easier when…" rather than "you always…"
-
-## When they escalate
-Respond briefly. Do not match the emotional intensity. Check in again the following day.
-
-## Response timing
-Not obligated to reply to late-night messages before morning.</pre>
-
-      <h3>AI-suggested adjustments <span style="font-size:12px;font-weight:400;color:var(--muted)">(based on your data)</span></h3>
-      <div class="fw-item">
-        <div class="fw-original">Initiation — "aim for 1 in 2 exchanges"</div>
-        <div class="fw-suggestion">Suggested: Data shows you currently initiate 73% of exchanges. Consider setting an explicit personal cap (e.g. send no more than 2 unanswered messages before pausing) to create natural reciprocity pressure.</div>
-        <div class="fw-basis">Based on: 73% user initiation rate, sustained over 5 months with no trend toward rebalancing.</div>
-      </div>
-      <div class="fw-item">
-        <div class="fw-original">When plans fall through — "wait 2–3 days before rescheduling"</div>
-        <div class="fw-suggestion">Suggested: Extend to 5–7 days. Current data shows re-offers within 3 days have been cancelled again 3 out of 3 times.</div>
-        <div class="fw-basis">Based on: visit cancellation pattern — all rapid re-offers (within 3 days) resulted in secondary cancellation.</div>
-      </div>
-      <div class="fw-item">
-        <div class="fw-original">When they express distress — "follow up the next day"</div>
-        <div class="fw-suggestion">Suggested: Keep this, but the data suggests adding: if no response to follow-up within 48 hours, send one more brief check-in and then hold.</div>
-        <div class="fw-basis">Based on: 14 Feb distress signal followed by 11-day silence despite 3 follow-up messages from you.</div>
-      </div>
-    </div>
-  </div>
-
-</div>
+<div class="chat-selector" id="chatSelector"></div>
+<div class="tabs" id="tabBar"></div>
+<div class="main" id="mainContent"></div>
 
 <script>
-// ── Demo chart data ──────────────────────────────────────────────────────────
-const labels = [
-  "1 Jan","15 Jan","1 Feb","15 Feb","1 Mar","15 Mar","1 Apr","15 Apr","1 May","15 May"
-];
-const userSentiment = [0.2, 0.3, 0.1, -0.1, 0.4, 0.2, 0.3, 0.1, 0.2, 0.3];
-const contactSentiment = [-0.1, 0.1, -0.3, -0.5, 0.5, -0.1, 0.2, -0.2, 0.1, 0.2];
-const contactBSentiment = [0.1, 0.2, 0.1, 0.0, 0.2, 0.3, 0.4, 0.5, 0.3, 0.4];
+// ── Static example data (mirrors what analyser.py embeds for real chats) ─────
 
-let sentChart = null;
-
-function initSentChart() {
-  if(sentChart) { sentChart.destroy(); sentChart = null; }
-  const ctx = document.getElementById("sentChart");
-  if(!ctx) return;
-  sentChart = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "You (Contact A)",
-          data: userSentiment,
-          borderColor: "#25D366",
-          backgroundColor: "#25D36622",
-          borderWidth: 2, pointRadius: 3, tension: 0.3
-        },
-        {
-          label: "Contact A",
-          data: contactSentiment,
-          borderColor: "#1a73e8",
-          backgroundColor: "transparent",
-          borderDash: [4,4],
-          borderWidth: 2, pointRadius: 3, tension: 0.3
-        },
-        {
-          label: "Contact B",
-          data: contactBSentiment,
-          borderColor: "#e91e63",
-          backgroundColor: "transparent",
-          borderDash: [4,4],
-          borderWidth: 2, pointRadius: 3, tension: 0.3
-        }
-      ]
+const CHATS = [
+  {
+    id: "Contact_A",
+    name: "Contact A",
+    relationship: "Family member",
+    tags: ["family","primary"],
+    has_framework: true,
+    framework_content: `## Core principle\nPrioritise consistency over intensity. Regular small contact is more effective than occasional large gestures.\n\n## Initiation\nAim to initiate 1 in 2 exchanges in the near term, with the goal of shifting toward 1 in 3 over time.\n\n## When they express distress\nAcknowledge before anything else. Do not problem-solve in the same message. Follow up the next day.\n\n## When plans fall through\nNote it without comment. Do not reschedule in the same message. Wait 2–3 days.\n\n## When you need to set a limit\nUse "I find it easier when…" rather than "you always…"\n\n## When they escalate\nRespond briefly. Do not match the emotional intensity. Check in again the following day.`,
+    visit_tracker: { offered:9, accepted:2, cancelled:5, happened:4, cancellations_by:{"Contact A":4,"You":1}, events:[
+      {date:"2024-01-05",type:"offered",sender:"You"},{date:"2024-01-06",type:"cancelled",sender:"Contact A"},
+      {date:"2024-01-20",type:"offered",sender:"You"},{date:"2024-01-21",type:"accepted",sender:"Contact A"},
+      {date:"2024-01-27",type:"happened",sender:""},{date:"2024-02-14",type:"offered",sender:"You"},
+      {date:"2024-02-14",type:"cancelled",sender:"Contact A"},{date:"2024-02-28",type:"offered",sender:"You"},
+      {date:"2024-03-03",type:"happened",sender:""},{date:"2024-03-18",type:"offered",sender:"You"},
+      {date:"2024-03-22",type:"cancelled",sender:"Contact A"}
+    ]},
+    initiation_balance: { user_pct:73, contact_pct:27, user_count:214, contact_count:79, trend:"stable" },
+    response_times: { user_avg_hours:1.2, contact_avg_hours:6.8, long_gaps:[{date:"2024-02-15",sender:"Contact A",hours:27}] },
+    daily_sentiment: {
+      user:  {"2024-01-01":0.2,"2024-01-15":0.3,"2024-02-01":0.1,"2024-02-15":-0.1,"2024-03-01":0.4,"2024-03-15":0.2,"2024-04-01":0.3,"2024-04-15":0.1,"2024-05-01":0.2,"2024-05-15":0.3},
+      contact:{"2024-01-01":-0.1,"2024-01-15":0.1,"2024-02-01":-0.3,"2024-02-15":-0.5,"2024-03-01":0.5,"2024-03-15":-0.1,"2024-04-01":0.2,"2024-04-15":-0.2,"2024-05-01":0.1,"2024-05-15":0.2}
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { position: "top" } },
-      scales: {
-        x: { ticks: { maxTicksLimit: 10 } },
-        y: { min: -1, max: 1, ticks: { stepSize: 0.5 } }
-      }
+    weekly_volume: {
+      weeks: ["2024-W01","2024-W02","2024-W03","2024-W04","2024-W05","2024-W06","2024-W07","2024-W08","2024-W09","2024-W10","2024-W11","2024-W12","2024-W13","2024-W14","2024-W15","2024-W16","2024-W17","2024-W18","2024-W19","2024-W20","2024-W21","2024-W22"],
+      user:    [18,12,22,8,14,19,11,6,20,24,15,28,10,7,18,22,13,9,16,21,14,11],
+      contact: [6, 4, 8, 2, 5, 7, 3, 1, 6, 9, 4, 11,3, 2, 6, 7, 4, 2, 5, 8, 4, 3]
+    },
+    distress_signals: [
+      {date:"2024-02-14",text:"I just feel like nobody really cares whether I'm here or not. Not really.",sender:"Contact A"},
+      {date:"2024-01-08",text:"Sometimes I feel so alone. Nobody checks in.",sender:"Contact A"},
+      {date:"2024-03-30",text:"I don't know what the point is some days. I really don't.",sender:"Contact A"}
+    ],
+    crisis_flags: [],
+    financial_requests: [
+      {date:"2024-01-22",text:"I'm a bit short this month — could you help with the electric bill?",sender:"Contact A"}
+    ],
+    narrative_vs_record: [
+      {claimed:"Contact A has expressed feeling cut off and that no one makes the effort to see them.",record_shows:"You offered 9 visits over 5 months; 5 were cancelled by Contact A. Contact A has initiated 0 visit offers."},
+      {claimed:"Contact A has described feeling \"invisible\" and that people don't reach out.",record_shows:"73% of conversation exchanges are initiated by you. Contact A initiates roughly 1 in 4 exchanges."},
+      {claimed:"Contact A has suggested visits \"always fall apart\" without specifying why.",record_shows:"Of 5 cancellations, 4 were by Contact A, typically on the day. 1 was by you with advance notice given."},
+      {claimed:"Contact A described March as \"a difficult month with nothing good in it.\"",record_shows:"The 3 March visit generated the highest positive sentiment scores of the 5-month dataset from both parties."}
+    ],
+    framework_suggestions: [
+      {framework_item:'Initiation — "aim for 1 in 2 exchanges"',suggested_adjustment:"Data shows you currently initiate 73% of exchanges. Consider setting an explicit personal cap — e.g. no more than 2 unanswered messages before pausing.",data_basis:"73% user initiation rate, sustained over 5 months with no trend toward rebalancing."},
+      {framework_item:'When plans fall through — "wait 2–3 days before rescheduling"',suggested_adjustment:"Extend to 5–7 days. Current data shows re-offers within 3 days have been cancelled again 3 out of 3 times.",data_basis:"Visit cancellation pattern — all rapid re-offers (within 3 days) resulted in secondary cancellation."}
+    ],
+    message_count: 1204,
+    messages_for_timeline: [
+      {date:"2024-03-03",sender:"Contact A",is_user:false,text:"Just got on the train. Was so lovely to see you today, thank you for having me over.",sentiment:"positive",intents:["VISIT_HAPPENED"]},
+      {date:"2024-03-03",sender:"You",is_user:true,text:"So glad you came! Let's do it again soon — it really was a good day.",sentiment:"positive",intents:[]},
+      {date:"2024-03-03",sender:"Contact A",is_user:false,text:"Yes. I needed it. You don't know how much it means.",sentiment:"positive",intents:[]},
+      {date:"2024-03-22",sender:"You",is_user:true,text:"Still on for Sunday? I was going to head over around noon.",sentiment:"neutral",intents:["VISIT_OFFERED"]},
+      {date:"2024-03-22",sender:"Contact A",is_user:false,text:"Actually I'm not feeling great. Think I'll have to leave it this time.",sentiment:"negative",intents:["VISIT_CANCELLED"]},
+      {date:"2024-03-22",sender:"You",is_user:true,text:"No problem at all, hope you feel better soon. Let me know when you're up for it.",sentiment:"positive",intents:[]},
+      {date:"2024-03-22",sender:"Contact A",is_user:false,text:"Thanks. Sorry.",sentiment:"neutral",intents:[]},
+      {date:"2024-02-14",sender:"Contact A",is_user:false,text:"I just feel like nobody really cares whether I'm here or not. Not really.",sentiment:"negative",intents:["DISTRESS_SIGNAL"]},
+      {date:"2024-02-14",sender:"You",is_user:true,text:"That's not true at all. I care. Can I call you tonight?",sentiment:"positive",intents:[]}
+    ]
+  },
+  {
+    id: "Contact_B",
+    name: "Contact B",
+    relationship: "Family member",
+    tags: ["family"],
+    has_framework: false,
+    framework_content: "",
+    visit_tracker: { offered:4, accepted:3, cancelled:1, happened:3, cancellations_by:{"You":1}, events:[
+      {date:"2024-01-14",type:"offered",sender:"You"},{date:"2024-01-15",type:"accepted",sender:"Contact B"},
+      {date:"2024-01-20",type:"happened",sender:""},{date:"2024-02-10",type:"offered",sender:"Contact B"},
+      {date:"2024-02-17",type:"happened",sender:""},{date:"2024-04-06",type:"offered",sender:"You"},
+      {date:"2024-04-13",type:"happened",sender:""},{date:"2024-05-10",type:"offered",sender:"You"},
+      {date:"2024-05-10",type:"cancelled",sender:"You"}
+    ]},
+    initiation_balance: { user_pct:51, contact_pct:49, user_count:62, contact_count:60, trend:"stable" },
+    response_times: { user_avg_hours:0.9, contact_avg_hours:1.4, long_gaps:[] },
+    daily_sentiment: {
+      user:    {"2024-01-01":0.1,"2024-01-15":0.2,"2024-02-01":0.1,"2024-02-15":0.0,"2024-03-01":0.2,"2024-03-15":0.3,"2024-04-01":0.4,"2024-04-15":0.5,"2024-05-01":0.3,"2024-05-15":0.4},
+      contact: {"2024-01-01":0.1,"2024-01-15":0.2,"2024-02-01":0.1,"2024-02-15":0.0,"2024-03-01":0.2,"2024-03-15":0.3,"2024-04-01":0.4,"2024-04-15":0.5,"2024-05-01":0.3,"2024-05-15":0.4}
+    },
+    weekly_volume: {
+      weeks: ["2024-W01","2024-W02","2024-W03","2024-W04","2024-W05","2024-W06","2024-W07","2024-W08","2024-W09","2024-W10","2024-W11","2024-W12","2024-W13","2024-W14","2024-W15","2024-W16","2024-W17","2024-W18","2024-W19","2024-W20","2024-W21","2024-W22"],
+      user:    [8,6,7,5,9,6,7,5,8,10,6,9,7,5,8,10,6,7,8,9,6,8],
+      contact: [7,5,8,6,8,7,6,5,9,10,5,8,6,4,7,9,7,6,7,9,5,7]
+    },
+    distress_signals: [
+      {date:"2024-02-16",text:"Been a tough week. Not sleeping well.",sender:"Contact B"},
+      {date:"2024-04-28",text:"David's being very difficult about the whole thing. It's exhausting.",sender:"Contact B"}
+    ],
+    crisis_flags: [],
+    financial_requests: [],
+    narrative_vs_record: [
+      {claimed:"Contact B says they are \"always the one reaching out\".",record_shows:"Initiation is almost exactly 50/50 — Contact B initiates 49% of exchanges, you initiate 51%."}
+    ],
+    framework_suggestions: [],
+    message_count: 643,
+    messages_for_timeline: [
+      {date:"2024-04-10",sender:"Contact B",is_user:false,text:"Had the best day, honestly. Everything just came together.",sentiment:"positive",intents:[]},
+      {date:"2024-04-10",sender:"You",is_user:true,text:"Tell me everything! You seem really happy today.",sentiment:"positive",intents:[]},
+      {date:"2024-04-10",sender:"Contact B",is_user:false,text:"Genuinely am. This is the first time in months I've felt properly settled.",sentiment:"positive",intents:[]},
+      {date:"2024-04-28",sender:"Contact B",is_user:false,text:"David's being very difficult about the whole thing. It's exhausting.",sentiment:"negative",intents:["DISTRESS_SIGNAL"]},
+      {date:"2024-04-28",sender:"You",is_user:true,text:"Sorry to hear that. Do you want to talk it through?",sentiment:"neutral",intents:[]}
+    ]
+  }
+];
+
+const CROSS_CHAT = {
+  correlations:[{date:"2024-04-28",type:"multi_chat_distress",chats:["Contact A","Contact B"],summary:"Distress signals appear in both chats around the same date — Contact B references 'David' negatively; Contact A expresses hopelessness."}],
+  shared_people:[{name:"David",chats:["Contact A","Contact B"]}]
+};
+const PEOPLE = {
+  David:{count:24,sentiment_dist:{positive:28,neutral:32,negative:40},excerpts:["David hasn't called in three weeks. I don't know what I've done.","Saw David yesterday — it was actually really nice. Like old times.","David's being very difficult about the whole thing. It's exhausting."],chats:["Contact A","Contact B"]},
+  Sarah:{count:11,sentiment_dist:{positive:72,neutral:23,negative:5},excerpts:["Sarah has been so lovely about the whole thing.","Spoke to Sarah — she really helped me think it through."],chats:["Contact A"]}
+};
+const PEOPLE_AI = {
+  David:{summary:"The author discusses David with noticeable ambivalence — warm references to shared history sit alongside frustration at recent behaviour. The pattern suggests an ongoing relationship under strain, and the name appears across both contacts suggesting David is a shared family figure.",sentiment_label:"Contested — mixed affect",warning_flag:"Negative mentions cluster around specific dates in both chats, suggesting a recurring source of tension rather than isolated incidents."},
+  Sarah:{summary:"Sarah is consistently referenced in positive terms. The author describes her as reliable and caring, and she appears to provide practical and emotional support to Contact A.",sentiment_label:"Supportive presence",warning_flag:""}
+};
+const TIMELINE_HIGHLIGHTS = [
+  {date:"2024-02-14",chat:"Contact A",significance:"Significant distress signal followed by 11-day gap with no response to three follow-up messages.",type:"warning"},
+  {date:"2024-03-03",chat:"Contact A",significance:"First confirmed visit in 7 weeks; post-visit messages strongly positive from both sides.",type:"positive"},
+  {date:"2024-03-22",chat:"Contact A",significance:"Visit cancelled day-of after being confirmed the previous evening; no reason given.",type:"warning"},
+  {date:"2024-04-10",chat:"Contact B",significance:"Longest sustained positive exchange in the dataset — 3 days of consistent back-and-forth with high sentiment scores.",type:"positive"},
+  {date:"2024-04-28",chat:"Contact A",significance:"'David' mentioned with strongly negative language; same name appears in Contact B chat 2 days later.",type:"warning"},
+  {date:"2024-05-15",chat:"Contact A",significance:"Initiation balance shifted — Contact A initiated 3 exchanges in a week, compared to average of less than 1 per month.",type:"normal"}
+];
+const CROSS_CHAT_LINKS = [
+  {date_range:"Late Feb 2024",chats_involved:"Contact A & Contact B",pattern:"Distress signals in Contact A coincide with Contact B referencing the same person with increased negative sentiment over a 3-day window.",significance:"Suggests a shared stressor may have triggered parallel conversations."},
+  {date_range:"April 2024",chats_involved:"Contact A & Contact B",pattern:"Both chats show a 2-week relative silence then resumed within 24 hours of each other.",significance:"May indicate an external event affecting both simultaneously."}
+];
+const CRISIS_ASSESSED = {};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RENDERING ENGINE (same approach as the real analyser output)
+// ─────────────────────────────────────────────────────────────────────────────
+
+let currentChat = null;
+let currentTab  = "conversations";
+let charts = {};
+
+function esc(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function fmt(d){ if(!d||d==="None") return ""; const dt=new Date(d); return isNaN(dt)?d:dt.toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}); }
+function badge(i){
+  const m={DISTRESS_SIGNAL:"distress",VISIT_OFFERED:"visit_offered",VISIT_CANCELLED:"visit_cancelled",VISIT_HAPPENED:"visit_happened"};
+  const l={DISTRESS_SIGNAL:"distress",VISIT_OFFERED:"visit offered",VISIT_CANCELLED:"visit cancelled",VISIT_HAPPENED:"✓ visit"};
+  return m[i]?`<span class="badge ${m[i]}">${l[i]}</span>`:"";
+}
+function noteKey(cid,date){ return `note_${cid}_${date}`; }
+function saveNote(cid,date,val){ localStorage.setItem(noteKey(cid,date),val); }
+function loadNote(cid,date){ return localStorage.getItem(noteKey(cid,date))||""; }
+function getChatById(id){ return CHATS.find(c=>c.id===id)||null; }
+function destroyChart(id){ if(charts[id]){ charts[id].destroy(); delete charts[id]; } }
+
+function rollingAvg(obj, w=7){
+  const keys=Object.keys(obj).sort(), vals=keys.map(k=>obj[k]), out={};
+  keys.forEach((k,i)=>{ const s=vals.slice(Math.max(0,i-w+1),i+1); out[k]=s.reduce((a,b)=>a+b,0)/s.length; });
+  return out;
+}
+function makeLineChart(cid, labels, datasets){
+  destroyChart(cid);
+  const ctx=document.getElementById(cid); if(!ctx) return;
+  charts[cid]=new Chart(ctx,{type:"line",data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"top"},tooltip:{mode:"index"}},scales:{x:{ticks:{maxTicksLimit:12,maxRotation:45}},y:{min:-1,max:1,ticks:{stepSize:0.5}}}}});
+}
+function makeBarChart(cid, labels, datasets){
+  destroyChart(cid);
+  const ctx=document.getElementById(cid); if(!ctx) return;
+  charts[cid]=new Chart(ctx,{type:"bar",data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"top"}},scales:{x:{ticks:{maxTicksLimit:16,maxRotation:45}},y:{beginAtZero:true}}}});
+}
+
+// ── Tab definitions ──────────────────────────────────────────────────────────
+function getTabsForChat(chatId){
+  const isAll = chatId==="all";
+  const base=[
+    {id:"conversations",label:"Conversations",all:true,single:false},
+    {id:"timeline",label:"Timeline",all:true,single:true},
+    {id:"visits",label:"Visits & Availability",all:false,single:true},
+    {id:"sentiment",label:"Sentiment",all:true,single:true},
+    {id:"initiation",label:"Initiation Balance",all:true,single:true},
+    {id:"crisis",label:"⚠ Crisis Moments",all:true,single:true},
+    {id:"support",label:"Support Given",all:true,single:true},
+    {id:"people",label:"People & Sentiment",all:true,single:true},
+    {id:"narrative",label:"Narrative vs Record",all:false,single:true},
+  ];
+  let tabs=base.filter(t=>isAll?t.all:t.single);
+  if(!isAll){ const chat=getChatById(chatId); if(chat&&chat.has_framework) tabs.push({id:"framework",label:"Framework",all:false,single:true}); }
+  return tabs;
+}
+
+function renderTabBar(chatId){
+  const tabs=getTabsForChat(chatId);
+  document.getElementById("tabBar").innerHTML=tabs.map(t=>
+    `<button class="tab-btn${currentTab===t.id?" active":""}" onclick="selectTab('${t.id}')">${t.label}</button>`
+  ).join("");
+}
+
+function selectChat(btn){
+  document.querySelectorAll(".chat-btn").forEach(b=>b.classList.remove("active"));
+  btn.classList.add("active");
+  currentChat=btn.dataset.chat;
+  currentTab = currentChat==="all" ? "conversations" : "timeline";
+  renderTabBar(currentChat);
+  renderMain();
+}
+function selectTab(tabId){
+  currentTab=tabId;
+  renderTabBar(currentChat);
+  renderMain();
+}
+
+function renderMain(){
+  const el=document.getElementById("mainContent");
+  if(!currentChat){ el.innerHTML=""; return; }
+  if(currentChat==="all"){
+    switch(currentTab){
+      case "conversations": renderConversations(el); break;
+      case "timeline":      renderMergedTimeline(el); break;
+      case "sentiment":     renderSentimentChart(el,CHATS); break;
+      case "initiation":    renderInitiation(el,CHATS); break;
+      case "crisis":        renderCrisis(el,CHATS); break;
+      case "support":       renderSupport(el,CHATS); break;
+      case "people":        renderPeople(el); break;
+      default: renderConversations(el);
     }
-  });
+  } else {
+    const chat=getChatById(currentChat);
+    if(!chat){ el.innerHTML=`<p class="no-data">Chat not found.</p>`; return; }
+    switch(currentTab){
+      case "timeline":   renderTimeline(el,chat); break;
+      case "visits":     renderVisits(el,chat); break;
+      case "sentiment":  renderSentimentChart(el,[chat]); break;
+      case "initiation": renderInitiation(el,[chat]); break;
+      case "crisis":     renderCrisis(el,[chat]); break;
+      case "support":    renderSupport(el,[chat]); break;
+      case "people":     renderPeople(el); break;
+      case "narrative":  renderNarrative(el,chat); break;
+      case "framework":  renderFramework(el,chat); break;
+      default: renderTimeline(el,chat);
+    }
+  }
 }
 
-// ── Tab/panel switching ───────────────────────────────────────────────────────
-function showTab(tabId) {
-  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-  const panel = document.getElementById("tab-" + tabId);
-  if(panel) panel.classList.add("active");
-  document.querySelectorAll(".tab-btn").forEach(b => {
-    if(b.getAttribute("onclick") && b.getAttribute("onclick").includes("'" + tabId + "'"))
-      b.classList.add("active");
+// ── Conversations (All) ───────────────────────────────────────────────────────
+function renderConversations(el){
+  let html=`<div class="card"><h2>Conversations overview</h2>`;
+  CHATS.forEach(chat=>{
+    const init=chat.initiation_balance, v=chat.visit_tracker;
+    html+=`<div style="border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:8px">
+        <div><b>${esc(chat.name)}</b> ${chat.tags.map(t=>`<span class="tag">${t}</span>`).join("")}
+          <div style="color:var(--muted);font-size:12px">${esc(chat.relationship)} · ${chat.message_count.toLocaleString()} messages</div></div>
+        <div style="font-size:13px;color:var(--muted)">Distress: <b>${chat.distress_signals.length}</b></div>
+      </div>
+      <div style="margin-top:12px">
+        <div class="bar-label"><span>Initiation: You ${init.user_pct}%</span><span>Them ${init.contact_pct}%</span></div>
+        <div class="bar"><div class="bar-user" style="width:${init.user_pct}%"></div><div class="bar-contact" style="width:${init.contact_pct}%"></div></div>
+      </div>
+      <div style="font-size:13px;margin-top:8px">Visits: ${v.offered} offered &nbsp; ${v.happened} happened &nbsp; ${v.cancelled} cancelled</div>
+    </div>`;
   });
-  if(tabId === "sentiment") requestAnimationFrame(initSentChart);
+  html+=`</div>`;
+  if(CROSS_CHAT_LINKS.length){
+    html+=`<div class="card"><h2>Cross-chat pattern links</h2>`;
+    CROSS_CHAT_LINKS.forEach(l=>{ html+=`<div class="cross-chat-card"><div style="font-weight:600;margin-bottom:4px">${esc(l.date_range)} — ${esc(l.chats_involved)}</div><div>${esc(l.pattern)}</div><div style="color:var(--muted);font-size:12px;margin-top:4px">${esc(l.significance)}</div></div>`; });
+    html+=`</div>`;
+  }
+  html+=`<div class="card"><h2>Key timeline moments</h2>`;
+  TIMELINE_HIGHLIGHTS.forEach(h=>{
+    html+=`<div class="timeline-event ${esc(h.type)}"><div class="event-date">${fmt(h.date)} — ${esc(h.chat)}</div><div>${esc(h.significance)}</div></div>`;
+  });
+  html+=`</div>`;
+  el.innerHTML=html;
 }
 
-function showPanel(which) {
-  document.querySelectorAll(".chat-btn").forEach(b => b.classList.remove("active"));
-  document.getElementById("btn-" + which).classList.add("active");
+// ── Timeline ──────────────────────────────────────────────────────────────────
+function renderTimeline(el, chat){
+  const byDate={};
+  chat.messages_for_timeline.forEach(m=>{ (byDate[m.date]||(byDate[m.date]=[])).push(m); });
+  let html=`<div>`;
+  Object.keys(byDate).sort().forEach(date=>{
+    const msgs=byDate[date];
+    const intents=[...new Set(msgs.flatMap(m=>m.intents))];
+    html+=`<div class="bubble-day"><div class="day-label">${fmt(date)}${intents.map(badge).join("")}</div>`;
+    msgs.forEach(m=>{
+      html+=`<div class="bubble ${m.is_user?"user":"contact"}"><div class="bubble-inner">${esc(m.text)}</div></div>`;
+    });
+    html+=`<div class="note-section">
+      <div class="note-label"><span>📝</span> Your private notes — saved in this browser only</div>
+      <textarea class="note" placeholder="Add context, reflections, or anything worth remembering about this day…" onchange="saveNote('${chat.id}','${date}',this.value)">${esc(loadNote(chat.id,date))}</textarea>
+    </div></div>`;
+  });
+  html+=`</div>`;
+  el.innerHTML=html;
 }
+function renderMergedTimeline(el){
+  const all=[];
+  CHATS.forEach(c=>c.messages_for_timeline.forEach(m=>all.push({...m,chat_name:c.name,chat_id:c.id})));
+  all.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  const byDate={};
+  all.forEach(m=>{ (byDate[m.date]||(byDate[m.date]=[])).push(m); });
+  const colors={"Contact_A":"#1a73e8","Contact_B":"#e91e63"};
+  let html=`<div>`;
+  Object.keys(byDate).sort().forEach(date=>{
+    const msgs=byDate[date], byChat={};
+    msgs.forEach(m=>{ (byChat[m.chat_id]||(byChat[m.chat_id]=[])).push(m); });
+    html+=`<div class="bubble-day"><div class="day-label">${fmt(date)}</div>`;
+    Object.entries(byChat).forEach(([cid,cMsgs])=>{
+      const col=colors[cid]||"#718096", chat=getChatById(cid);
+      html+=`<div style="border-left:3px solid ${col};padding-left:10px;margin-bottom:8px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${esc(chat?chat.name:cid)}</div>`;
+      cMsgs.slice(0,4).forEach(m=>{ html+=`<div class="bubble ${m.is_user?"user":"contact"}"><div class="bubble-inner">${esc(m.text.slice(0,200))}</div></div>`; });
+      html+=`</div>`;
+    });
+    html+=`</div>`;
+  });
+  html+=`</div>`;
+  el.innerHTML=html;
+}
+
+// ── Visits ────────────────────────────────────────────────────────────────────
+function renderVisits(el, chat){
+  const v=chat.visit_tracker;
+  let html=`<div class="card"><h2>Visits & Availability — ${esc(chat.name)}</h2>
+    <div class="stat-row">
+      <div class="stat"><div class="val" style="color:var(--contact)">${v.offered}</div><div class="lbl">Offered</div></div>
+      <div class="stat ok"><div class="val">${v.happened}</div><div class="lbl">Happened</div></div>
+      <div class="stat warn"><div class="val">${v.cancelled}</div><div class="lbl">Cancelled</div></div>
+    </div>`;
+  if(Object.keys(v.cancellations_by).length){
+    html+=`<div style="font-size:13px;margin-bottom:12px">Cancellations by: `;
+    Object.entries(v.cancellations_by).forEach(([who,n])=>{ html+=`<b>${esc(who)}</b>: ${n} &nbsp; `; });
+    html+=`</div>`;
+  }
+  html+=`<h3>Event log</h3>`;
+  v.events.forEach(e=>{ html+=`<div class="visit-event"><div class="visit-dot ${e.type}"></div><div style="color:var(--muted);font-size:12px;min-width:90px">${fmt(e.date)}</div><div><b style="text-transform:capitalize">${e.type}</b>${e.sender?" by "+esc(e.sender):""}</div></div>`; });
+  html+=`</div>`;
+  el.innerHTML=html;
+}
+
+// ── Sentiment ─────────────────────────────────────────────────────────────────
+function renderSentimentChart(el, chats){
+  el.innerHTML=`
+    <div class="card">
+      <h2>Mood over time</h2>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Score runs from <b>−1</b> (most negative) through <b>0</b> (neutral) to <b>+1</b> (most positive). Plotted as a 7-day rolling average. Solid line = you &nbsp;|&nbsp; Dashed line = contact.</p>
+      <div class="chart-wrap"><canvas id="sentChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Message volume</h2>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Messages sent per week. Gaps or sudden drops often indicate silence, conflict, or a change in the relationship.</p>
+      <div class="chart-wrap-sm"><canvas id="volChart"></canvas></div>
+    </div>`;
+  const colors=["#25D366","#1a73e8","#e91e63","#ff9800"];
+  const allDates=[...new Set(chats.flatMap(c=>Object.keys(c.daily_sentiment.user||{}).concat(Object.keys(c.daily_sentiment.contact||{}))))].sort();
+  const sentDS=[];
+  chats.forEach((chat,i)=>{
+    const uA=rollingAvg(chat.daily_sentiment.user||{}), cA=rollingAvg(chat.daily_sentiment.contact||{});
+    const lbl=chats.length>1?chat.name:"";
+    sentDS.push({label:lbl?`You (${lbl})`:"You",data:allDates.map(d=>uA[d]??null),borderColor:colors[i],backgroundColor:colors[i]+"22",borderWidth:2,pointRadius:1,spanGaps:true,tension:.3});
+    sentDS.push({label:lbl?chat.name:chat.name,data:allDates.map(d=>cA[d]??null),borderColor:colors[i]+"cc",backgroundColor:"transparent",borderWidth:2,borderDash:[4,4],pointRadius:1,spanGaps:true,tension:.3});
+  });
+  requestAnimationFrame(()=>makeLineChart("sentChart",allDates,sentDS));
+  const allWeeks=[...new Set(chats.flatMap(c=>(c.weekly_volume&&c.weekly_volume.weeks)||[]))].sort();
+  const volDS=[];
+  const bc=["rgba(37,211,102,.7)","rgba(26,115,232,.7)","rgba(233,30,99,.7)"];
+  const bcc=["rgba(37,211,102,.35)","rgba(26,115,232,.35)","rgba(233,30,99,.35)"];
+  chats.forEach((chat,i)=>{
+    if(!chat.weekly_volume) return;
+    const wm={}; chat.weekly_volume.weeks.forEach((w,j)=>{ wm[w]={u:chat.weekly_volume.user[j],c:chat.weekly_volume.contact[j]}; });
+    const lbl=chats.length>1?chat.name:"";
+    volDS.push({label:lbl?`You (${lbl})`:"You",data:allWeeks.map(w=>wm[w]?wm[w].u:0),backgroundColor:bc[i%3],borderRadius:3,borderWidth:0});
+    volDS.push({label:lbl?chat.name:chat.name,data:allWeeks.map(w=>wm[w]?wm[w].c:0),backgroundColor:bcc[i%3],borderRadius:3,borderWidth:0});
+  });
+  const volLabels=allWeeks.map((w,i)=>i%2===0?w:"");
+  requestAnimationFrame(()=>makeBarChart("volChart",volLabels,volDS));
+}
+
+// ── Initiation ────────────────────────────────────────────────────────────────
+function renderInitiation(el, chats){
+  let html=`<div class="card"><h2>Initiation Balance</h2>`;
+  chats.forEach(chat=>{
+    const init=chat.initiation_balance;
+    html+=`<div style="margin-bottom:20px">${chats.length>1?`<h3>${esc(chat.name)}</h3>`:""}
+      <div class="bar-label"><span>You: ${init.user_pct}% (${init.user_count})</span><span>${esc(chat.name)}: ${init.contact_pct}% (${init.contact_count})</span></div>
+      <div class="bar"><div class="bar-user" style="width:${init.user_pct}%"></div><div class="bar-contact" style="width:${init.contact_pct}%"></div></div>
+      <div style="font-size:12px;color:var(--muted)">Trend: ${init.trend}</div></div>`;
+  });
+  html+=`</div>`;
+  el.innerHTML=html;
+}
+
+// ── Crisis ────────────────────────────────────────────────────────────────────
+function renderCrisis(el, chats){
+  let html=`<div class="card"><h2>Crisis Moments</h2>
+    <button style="background:var(--danger);color:#fff;border:none;padding:10px 20px;border-radius:var(--radius);cursor:pointer;font-size:14px;margin-bottom:16px" onclick="this.nextElementSibling.style.display='block';this.style.display='none'">Click to reveal flagged messages</button>
+    <div style="display:none">`;
+  let any=false;
+  chats.forEach(chat=>{
+    if(!chat.crisis_flags.length) return;
+    any=true;
+    if(chats.length>1) html+=`<h3>${esc(chat.name)}</h3>`;
+    chat.crisis_flags.forEach(f=>{ html+=`<div style="border:1px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:10px"><div style="font-size:11px;color:var(--muted)">${fmt(f.date)}</div><div style="font-size:13px">${esc(f.text)}</div></div>`; });
+  });
+  if(!any) html+=`<p style="color:var(--muted);font-size:14px">No crisis flags detected in this data.</p>`;
+  html+=`</div><div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--radius);padding:14px;font-size:14px;margin-top:16px">
+    <b>If you are concerned about immediate safety:</b><br>Call <b>999</b> (emergency) or <b>Samaritans on 116 123</b> (free, 24/7, UK)</div></div>`;
+  el.innerHTML=html;
+}
+
+// ── Support ───────────────────────────────────────────────────────────────────
+function renderSupport(el, chats){
+  let html=`<div class="card"><h2>Support Given</h2>`;
+  let any=false;
+  chats.forEach(chat=>{
+    if(!chat.financial_requests.length) return;
+    any=true;
+    if(chats.length>1) html+=`<h3>${esc(chat.name)}</h3>`;
+    chat.financial_requests.forEach(r=>{ html+=`<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px"><span style="color:var(--muted);font-size:11px">${fmt(r.date)} · ${esc(r.sender)}</span><br>${esc(r.text)}</div>`; });
+  });
+  if(!any) html+=`<p class="no-data">No financial requests detected.</p>`;
+  html+=`</div>`;
+  el.innerHTML=html;
+}
+
+// ── People ────────────────────────────────────────────────────────────────────
+function renderPeople(el){
+  const names=Object.keys(PEOPLE);
+  if(!names.length){ el.innerHTML=`<p class="no-data">No recurring names detected.</p>`; return; }
+  let html=`<div class="card"><h2>People & Sentiment</h2>`;
+  names.forEach(name=>{
+    const p=PEOPLE[name], ai=PEOPLE_AI[name]||{}, sd=p.sentiment_dist||{};
+    html+=`<div class="person-card">
+      <div class="name">${esc(name)} <span style="font-size:12px;color:var(--muted);font-weight:400">×${p.count} mentions · ${p.chats.join(", ")}</span></div>
+      ${ai.sentiment_label?`<div class="label">${esc(ai.sentiment_label)}</div>`:""}
+      <div class="sb-wrap"><div class="sb-pos" style="width:${sd.positive||0}%"></div><div class="sb-neu" style="width:${sd.neutral||0}%"></div><div class="sb-neg" style="width:${sd.negative||0}%"></div></div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">+${sd.positive||0}% / =${sd.neutral||0}% / −${sd.negative||0}%</div>
+      ${ai.warning_flag?`<div style="background:#fef3c7;border-radius:4px;padding:8px;font-size:12px;margin-bottom:8px">⚠ ${esc(ai.warning_flag)}</div>`:""}
+      ${ai.summary?`<div style="font-size:13px;margin-bottom:8px">${esc(ai.summary)}</div>`:""}
+      ${p.excerpts&&p.excerpts.length?`<details><summary style="font-size:12px;color:var(--muted);cursor:pointer">Show excerpts</summary><div style="margin-top:8px">${p.excerpts.map(e=>`<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">"${esc(e)}"</div>`).join("")}</div></details>`:""}
+    </div>`;
+  });
+  html+=`</div>`;
+  el.innerHTML=html;
+}
+
+// ── Narrative vs Record ───────────────────────────────────────────────────────
+function renderNarrative(el, chat){
+  let html=`<div class="card"><h2>Narrative vs Record — ${esc(chat.name)}</h2>`;
+  if(!chat.narrative_vs_record.length){ html+=`<p class="no-data">No contrasts generated.</p>`; }
+  else { chat.narrative_vs_record.forEach(p=>{ html+=`<div class="contrast-pair"><div class="claimed">${esc(p.claimed)}</div><div class="record">${esc(p.record_shows)}</div></div>`; }); }
+  html+=`</div>`;
+  const corr=CROSS_CHAT.correlations.filter(c=>c.chats&&c.chats.includes(chat.name));
+  if(corr.length){
+    html+=`<div class="card"><h2>Cross-chat correlations</h2>`;
+    corr.forEach(c=>{ html+=`<div class="cross-chat-card"><div style="font-weight:600">${fmt(c.date)} — ${esc(c.type)}</div><div>${esc(c.summary)}</div></div>`; });
+    html+=`</div>`;
+  }
+  el.innerHTML=html;
+}
+
+// ── Framework ─────────────────────────────────────────────────────────────────
+function renderFramework(el, chat){
+  let html=`<div class="card"><h2>Communications Framework — ${esc(chat.name)}</h2>`;
+  if(chat.framework_content) html+=`<pre style="white-space:pre-wrap;font-size:13px;line-height:1.7;padding:16px;background:var(--bg);border-radius:var(--radius);margin-bottom:16px">${esc(chat.framework_content)}</pre>`;
+  if(chat.framework_suggestions&&chat.framework_suggestions.length){
+    html+=`<h3 style="margin-bottom:10px">AI-suggested adjustments</h3>`;
+    chat.framework_suggestions.forEach(s=>{ html+=`<div class="fw-item"><div class="fw-original">${esc(s.framework_item)}</div><div class="fw-suggestion">Suggested: ${esc(s.suggested_adjustment)}</div><div class="fw-basis">Based on: ${esc(s.data_basis)}</div></div>`; });
+  }
+  html+=`</div>`;
+  el.innerHTML=html;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(function init(){
+  // Build chat selector buttons
+  const sel=document.getElementById("chatSelector");
+  CHATS.forEach(c=>{ const b=document.createElement("button"); b.className="chat-btn"; b.dataset.chat=c.id; b.textContent=c.name; b.onclick=()=>selectChat(b); sel.appendChild(b); });
+  const allBtn=document.createElement("button"); allBtn.className="chat-btn active"; allBtn.dataset.chat="all"; allBtn.textContent="All conversations"; allBtn.onclick=()=>selectChat(allBtn); sel.appendChild(allBtn);
+  // Start on All > Conversations
+  currentChat="all"; currentTab="conversations";
+  renderTabBar("all");
+  renderMain();
+})();
 </script>
 </body>
 </html>
