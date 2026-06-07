@@ -738,7 +738,7 @@ async function pick(id, type) {
       if (!senders || senders.length === 0) {
         if (hint && btns) {
           document.getElementById(`sh-lbl-${id}`).textContent = 'No messages found in this file';
-          btns.innerHTML = '<span style="color:#ef4444">Make sure it\'s a WhatsApp export (.txt) and not a screenshot or PDF.</span>';
+          btns.innerHTML = "<span style='color:#ef4444'>Make sure it's a WhatsApp export (.txt) and not a screenshot or PDF.</span>";
           hint.style.display = 'block';
         }
       } else {
