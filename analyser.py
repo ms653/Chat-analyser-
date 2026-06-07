@@ -1565,13 +1565,23 @@ function renderSentimentChart(el, chats) {{
   const colors=["#25D366","#1a73e8","#e91e63","#ff9800","#9c27b0"];
   const colorsDash=["#25D366cc","#1a73e8cc","#e91e63cc","#ff9800cc","#9c27b0cc"];
 
-  // ── Mood chart ──────────────────────────────────────────────────────────
+  // ── Mood chart (with crisis/distress overlays) ───────────────────────────
+  // Extend allDates to include any crisis/distress dates not already present
+  const _flagDates=chats.flatMap(c=>
+    [...(c.crisis_flags||[]),...(c.distress_signals||[])].map(s=>s.date).filter(Boolean)
+  );
+  const allDates=[...new Set([
+    ...chats.flatMap(c=>Object.keys(c.daily_sentiment.user||{{}}).concat(Object.keys(c.daily_sentiment.contact||{{}}))),
+    ..._flagDates
+  ])].sort();
+
   const sentDatasets=[];
-  const allDates=[...new Set(chats.flatMap(c=>Object.keys(c.daily_sentiment.user||{{}}).concat(Object.keys(c.daily_sentiment.contact||{{}}))))].sort();
   chats.forEach((chat,i)=>{{
     const userAvg=rollingAvg(chat.daily_sentiment.user||{{}});
     const contAvg=rollingAvg(chat.daily_sentiment.contact||{{}});
     const label=chats.length>1?chat.name:"";
+
+    // Mood lines
     sentDatasets.push({{
       label:label?`You (${{label}})`:"You",
       data:allDates.map(d=>userAvg[d]??null),
@@ -1584,8 +1594,72 @@ function renderSentimentChart(el, chats) {{
       borderColor:colorsDash[i%colorsDash.length],backgroundColor:"transparent",
       borderWidth:2,borderDash:[4,4],pointRadius:1,spanGaps:true,tension:.3
     }});
+
+    // Distress signal markers — orange dots near the bottom of the chart
+    const distressMap={{}};
+    (chat.distress_signals||[]).forEach(s=>{{
+      if(s.date) (distressMap[s.date]||(distressMap[s.date]=[])).push(s.text.slice(0,140));
+    }});
+    if(Object.keys(distressMap).length) {{
+      sentDatasets.push({{
+        label:label?`Distress (${{label}})`:"Distress signal",
+        data:allDates.map(d=>distressMap[d]?-0.87:null),
+        _tips:distressMap,
+        backgroundColor:"rgba(245,158,11,.9)",borderColor:"rgba(245,158,11,1)",
+        pointStyle:"circle",pointRadius:8,pointHoverRadius:11,
+        showLine:false,spanGaps:false
+      }});
+    }}
+
+    // Crisis flag markers — red triangles at the very bottom
+    const crisisMap={{}};
+    (chat.crisis_flags||[]).forEach(s=>{{
+      if(s.date) (crisisMap[s.date]||(crisisMap[s.date]=[])).push(s.text.slice(0,140));
+    }});
+    if(Object.keys(crisisMap).length) {{
+      sentDatasets.push({{
+        label:label?`Crisis flag (${{label}})`:"Crisis flag",
+        data:allDates.map(d=>crisisMap[d]?-0.97:null),
+        _tips:crisisMap,
+        backgroundColor:"rgba(239,68,68,.9)",borderColor:"rgba(239,68,68,1)",
+        pointStyle:"triangle",pointRadius:9,pointHoverRadius:12,
+        showLine:false,spanGaps:false
+      }});
+    }}
   }});
-  requestAnimationFrame(()=>makeLineChart("sentChart",allDates,sentDatasets));
+
+  requestAnimationFrame(function(){{
+    destroyChart("sentChart");
+    const ctx=document.getElementById("sentChart"); if(!ctx) return;
+    charts["sentChart"]=new Chart(ctx,{{
+      type:"line",
+      data:{{labels:allDates,datasets:sentDatasets}},
+      options:{{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{{
+          legend:{{position:"top"}},
+          tooltip:{{
+            mode:"index",
+            callbacks:{{
+              label:function(ctx2){{
+                const ds=ctx2.dataset;
+                if(ds._tips){{
+                  const texts=ds._tips[allDates[ctx2.dataIndex]];
+                  return texts ? ds.label+': "'+texts[0]+'"' : null;
+                }}
+                if(ctx2.parsed.y===null||ctx2.parsed.y===undefined) return null;
+                return ctx2.dataset.label+': '+ctx2.parsed.y.toFixed(2);
+              }}
+            }}
+          }}
+        }},
+        scales:{{
+          x:{{ticks:{{maxTicksLimit:12,maxRotation:45}}}},
+          y:{{min:-1,max:1,ticks:{{stepSize:0.5}}}}
+        }}
+      }}
+    }});
+  }});
 
   // ── Volume chart ─────────────────────────────────────────────────────────
   const volDatasets=[];

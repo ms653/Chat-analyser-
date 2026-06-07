@@ -500,15 +500,58 @@ function renderSentimentChart(el, chats){
       <div class="chart-wrap-sm"><canvas id="volChart"></canvas></div>
     </div>`;
 
-  const allDates=[...new Set(chats.flatMap(c=>Object.keys(c.daily_sentiment.user||{}).concat(Object.keys(c.daily_sentiment.contact||{}))))].sort();
+  // Extend dates to include any crisis/distress dates not in sentiment series
+  const _flagDates=chats.flatMap(c=>
+    [...(c.crisis_flags||[]),...(c.distress_signals||[])].map(s=>s.date).filter(Boolean)
+  );
+  const allDates=[...new Set([
+    ...chats.flatMap(c=>Object.keys(c.daily_sentiment.user||{}).concat(Object.keys(c.daily_sentiment.contact||{}))),
+    ..._flagDates
+  ])].sort();
+
   const sentDS=[];
   chats.forEach((chat,i)=>{
     const uA=rollingAvg(chat.daily_sentiment.user||{}), cA=rollingAvg(chat.daily_sentiment.contact||{});
     const lbl=chats.length>1?chat.name:"";
+
+    // Mood lines
     sentDS.push({label:lbl?`You (${lbl})`:"You",data:allDates.map(d=>uA[d]??null),borderColor:colors[i],backgroundColor:colors[i]+"22",borderWidth:2,pointRadius:1,spanGaps:true,tension:.3});
     sentDS.push({label:lbl?chat.name:chat.name,data:allDates.map(d=>cA[d]??null),borderColor:colorsDash[i],backgroundColor:"transparent",borderWidth:2,borderDash:[4,4],pointRadius:1,spanGaps:true,tension:.3});
+
+    // Distress markers — orange circles near chart bottom
+    const distressMap={};
+    (chat.distress_signals||[]).forEach(s=>{ if(s.date)(distressMap[s.date]||(distressMap[s.date]=[])).push(s.text.slice(0,140)); });
+    if(Object.keys(distressMap).length){
+      sentDS.push({label:lbl?`Distress (${lbl})`:"Distress signal",
+        data:allDates.map(d=>distressMap[d]?-0.87:null),_tips:distressMap,
+        backgroundColor:"rgba(245,158,11,.9)",borderColor:"rgba(245,158,11,1)",
+        pointStyle:"circle",pointRadius:8,pointHoverRadius:11,showLine:false,spanGaps:false});
+    }
+
+    // Crisis flag markers — red triangles at very bottom
+    const crisisMap={};
+    (chat.crisis_flags||[]).forEach(s=>{ if(s.date)(crisisMap[s.date]||(crisisMap[s.date]=[])).push(s.text.slice(0,140)); });
+    if(Object.keys(crisisMap).length){
+      sentDS.push({label:lbl?`Crisis flag (${lbl})`:"Crisis flag",
+        data:allDates.map(d=>crisisMap[d]?-0.97:null),_tips:crisisMap,
+        backgroundColor:"rgba(239,68,68,.9)",borderColor:"rgba(239,68,68,1)",
+        pointStyle:"triangle",pointRadius:9,pointHoverRadius:12,showLine:false,spanGaps:false});
+    }
   });
-  requestAnimationFrame(()=>makeLineChart("sentChart",allDates,sentDS));
+
+  requestAnimationFrame(function(){
+    destroyChart("sentChart");
+    const ctx=document.getElementById("sentChart"); if(!ctx) return;
+    charts["sentChart"]=new Chart(ctx,{type:"line",data:{labels:allDates,datasets:sentDS},
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{position:"top"},tooltip:{mode:"index",callbacks:{label:function(c2){
+          const ds=c2.dataset;
+          if(ds._tips){const t=ds._tips[allDates[c2.dataIndex]]; return t?ds.label+': "'+t[0]+'"':null;}
+          if(c2.parsed.y===null||c2.parsed.y===undefined) return null;
+          return ds.label+': '+c2.parsed.y.toFixed(2);
+        }}}},
+        scales:{x:{ticks:{maxTicksLimit:12,maxRotation:45}},y:{min:-1,max:1,ticks:{stepSize:0.5}}}}});
+  });
 
   // Chart 2: Volume
   const allWeeks=[...new Set(chats.flatMap(c=>(c.weekly_volume&&c.weekly_volume.weeks)||[]))].sort();
