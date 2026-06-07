@@ -1011,7 +1011,7 @@ a{{color:var(--contact)}}
 .tabs{{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;display:flex;gap:0;overflow-x:auto}}
 .tab-btn{{padding:12px 18px;border:none;background:transparent;cursor:pointer;font-size:14px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s}}
 .tab-btn.active{{color:var(--contact);border-bottom-color:var(--contact)}}
-.main{{max-width:1200px;margin:0 auto;padding:24px}}
+.main{{padding:24px}}
 .panel{{display:none}}.panel.active{{display:block}}
 .card{{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;box-shadow:var(--shadow)}}
 .card h2{{font-size:16px;font-weight:700;margin-bottom:12px;color:var(--text)}}

@@ -325,13 +325,13 @@ class AnalyserAPI:
             self._ulog(f"Update error: {e}")
 
     def relaunch(self):
-        """Open the freshly built .app and exit this instance."""
+        """Open the freshly built .app and close this window."""
         proj = _get_project_dir()
         if proj:
             new_app = proj / "dist" / "WhatsApp Analyser.app"
             if new_app.exists():
                 subprocess.Popen(["open", str(new_app)])
-        sys.exit(0)
+        self._window.destroy()
 
     # ── Analysis ─────────────────────────────────────────────────────────────
 
