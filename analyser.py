@@ -103,6 +103,29 @@ def _parse_dt(date_str: str, time_str: str) -> Optional[datetime.datetime]:
     return None
 
 
+def detect_senders(file_path: str, sample_size: int = 400) -> list:
+    """
+    Quickly scan a chat file and return unique sender names, ordered by
+    message count (most frequent first). Used by the GUI to auto-suggest
+    names without a full parse.
+    """
+    try:
+        raw = Path(file_path).read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, PermissionError, OSError):
+        return []
+    counts: dict = {}
+    for line in raw.splitlines():
+        m = MSG_RE.match(line)
+        if m:
+            sender = m.group(3).strip()
+            text = m.group(4).strip()
+            if not _is_noise(text):
+                counts[sender] = counts.get(sender, 0) + 1
+                if sum(counts.values()) >= sample_size:
+                    break
+    return [s for s, _ in sorted(counts.items(), key=lambda x: -x[1])]
+
+
 def parse_chat(config: dict) -> dict:
     """Parse a single WhatsApp export file. Returns a chat object."""
     path = config["file"]

@@ -88,6 +88,12 @@ class AnalyserAPI:
         except Exception as e:
             print(f"[WARN] Config save failed: {e}")
 
+    # ── Chat file helpers ────────────────────────────────────────────────────
+
+    def detect_senders(self, file_path: str) -> list:
+        """Return sender names found in the chat file, most frequent first."""
+        return analyser.detect_senders(file_path)
+
     # ── Notes persistence (disk) ─────────────────────────────────────────────
     # Called from JS in the results HTML so notes survive browser storage resets
     # and HTML regenerations. Keyed by noteKey(chatId, date) strings.
@@ -430,10 +436,14 @@ function chatHTML(id, d) {
           <input type="text" id="f-${id}" placeholder="/path/to/WhatsApp Chat.txt" readonly value="${ea(d.file||'')}">
           <button class="btn btn-ghost" onclick="pick(${id},'chat')">Browse…</button>
         </div>
+        <div id="sh-${id}" style="display:none;margin-top:10px;padding:12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:13px">
+          <div style="font-weight:600;margin-bottom:6px">Two senders detected — which one is you?</div>
+          <div id="sb-${id}" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+        </div>
       </div>
       <div class="fld">
         <label>Contact name</label>
-        <input type="text" id="n-${id}" placeholder="Mum" value="${ea(d.contact_name||'')}">
+        <input type="text" id="n-${id}" placeholder="auto-detected after Browse" value="${ea(d.contact_name||'')}">
       </div>
       <div class="fld">
         <label>Relationship</label>
@@ -463,13 +473,56 @@ function addChat(d) {
 
 function rmChat(id) { document.getElementById(`cr-${id}`)?.remove(); }
 
+function showSenderHint(chatId, senders) {
+  const hint = document.getElementById(`sh-${chatId}`);
+  const btns = document.getElementById(`sb-${chatId}`);
+  if (!hint || !btns) return;
+  btns.innerHTML = '';
+  senders.slice(0, 4).forEach(name => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-ghost';
+    btn.style.cssText = 'font-size:13px;padding:6px 14px';
+    btn.textContent = name + ' — this is me';
+    btn.onclick = () => {
+      document.getElementById('primaryUser').value = name;
+      const other = senders.find(s => s !== name) || '';
+      const nameField = document.getElementById(`n-${chatId}`);
+      if (!nameField.value) nameField.value = other;
+      hint.style.display = 'none';
+    };
+    btns.appendChild(btn);
+  });
+  hint.style.display = 'block';
+}
+
 async function pick(id, type) {
   try {
-    const path = type === 'chat'
-      ? await pywebview.api.pick_chat_file()
-      : await pywebview.api.pick_framework_file();
-    if (path) document.getElementById(type==='chat'?`f-${id}`:`w-${id}`).value = path;
-  } catch(e){ console.error(e); }
+    if (type === 'chat') {
+      const path = await pywebview.api.pick_chat_file();
+      if (!path) return;
+      document.getElementById(`f-${id}`).value = path;
+
+      // Auto-detect sender names from the file
+      const senders = await pywebview.api.detect_senders(path);
+      if (senders && senders.length >= 2) {
+        const primaryUser = document.getElementById('primaryUser').value.trim();
+        const nameField   = document.getElementById(`n-${id}`);
+        if (primaryUser) {
+          // Match primary user against detected names (case-insensitive partial match)
+          const isMe = s => s.toLowerCase() === primaryUser.toLowerCase()
+                         || s.toLowerCase().includes(primaryUser.split(' ')[0].toLowerCase())
+                         || primaryUser.toLowerCase().includes(s.split(' ')[0].toLowerCase());
+          const contact = senders.find(s => !isMe(s)) || senders[0];
+          if (!nameField.value) nameField.value = contact;
+        } else {
+          showSenderHint(id, senders);
+        }
+      }
+    } else {
+      const path = await pywebview.api.pick_framework_file();
+      if (path) document.getElementById(`w-${id}`).value = path;
+    }
+  } catch(e) { console.error('pick error:', e); }
 }
 
 // ── Build config from form ────────────────────────────────────────────────────
