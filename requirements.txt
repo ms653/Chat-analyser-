@@ -1,0 +1,17 @@
+# WhatsApp Chat Analyser — dependencies
+# Install with: pip install -r requirements.txt
+
+# Core
+requests>=2.31.0
+
+# NLP — at least one required
+# Option A (recommended): HuggingFace transformers (better sentiment quality)
+transformers>=4.40.0
+torch>=2.0.0           # CPU-only is fine; or install torch separately per https://pytorch.org
+
+# Option B (lighter): TextBlob (set NLP_ENGINE = "textblob" in analyser.py)
+textblob>=0.18.0
+
+# Optional — Claude API for crisis assessment
+# Only needed if CRISIS_AI_ASSESSMENT = True
+anthropic>=0.28.0
