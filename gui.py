@@ -485,7 +485,17 @@ class AnalyserAPI:
             except Exception:
                 pass
 
-            # 4 — Rebuild .app using the spec file (preserves all hidden imports)
+            # 4 — Remove old bundle before building so PyInstaller's Analysis phase
+            #     doesn't collect stale resource paths from inside the previous .app
+            old_app = proj / "dist" / "WhatsApp Analyser.app"
+            if old_app.exists():
+                try:
+                    shutil.rmtree(str(old_app))
+                    self._ulog("Removed old bundle — rebuilding…")
+                except Exception as _re:
+                    self._ulog(f"Warning: could not remove old bundle ({_re}) — build may fail.")
+
+            # 5 — Rebuild .app using the spec file (preserves all hidden imports)
             self._ulog("Rebuilding app — this takes about a minute…")
             spec_file = proj / "WhatsApp Analyser.spec"
             if spec_file.exists():
