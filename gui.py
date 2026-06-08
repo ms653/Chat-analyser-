@@ -37,6 +37,8 @@ CONFIG_FILE   = Path.home() / ".whatsapp_analyser_config.json"
 NOTES_FILE    = Path.home() / ".whatsapp_analyser_notes.json"
 # Project source directory — saved on first source run, read back when frozen
 _PROJ_PATH_FILE = Path.home() / ".whatsapp_analyser_project.txt"
+# History of completed analysis runs
+HISTORY_DIR   = Path.home() / ".whatsapp_analyser_history"
 
 GITHUB_REPO = "ms653/Chat-analyser-"
 
@@ -185,6 +187,44 @@ class AnalyserAPI:
         except Exception:
             pass
         return {}
+
+    # ── Analysis history ─────────────────────────────────────────────────────
+
+    def list_history(self) -> list:
+        """Return list of saved analyses, newest first. Each item: {name, path, size_kb}."""
+        try:
+            HISTORY_DIR.mkdir(exist_ok=True)
+            items = sorted(HISTORY_DIR.glob("*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+            return [
+                {
+                    "name": p.stem,
+                    "path": str(p),
+                    "size_kb": round(p.stat().st_size / 1024),
+                }
+                for p in items[:50]
+            ]
+        except Exception:
+            return []
+
+    def open_history(self, path: str):
+        """Load a previously saved analysis HTML into the window."""
+        try:
+            html = Path(path).read_text(encoding="utf-8")
+            html = html.replace("<body>", "<body>" + _TOOLBAR, 1)
+            self._window.load_html(html)
+        except Exception as e:
+            self._window.evaluate_js(f"setError({json.dumps('Could not open history: ' + str(e))})")
+
+    def delete_history(self, path: str) -> bool:
+        """Delete a saved analysis file."""
+        try:
+            p = Path(path)
+            if HISTORY_DIR in p.parents and p.suffix == ".html":
+                p.unlink(missing_ok=True)
+                return True
+        except Exception:
+            pass
+        return False
 
     # ── Navigation ───────────────────────────────────────────────────────────
 
@@ -533,7 +573,7 @@ class AnalyserAPI:
             # 2 ── Per-chat NLP analysis ──────────────────────────────────────
             for chat in chats:
                 self._log(f"Scoring sentiment — {chat['contact_name']}…")
-                analyser.run_per_chat_analysis(chat, engine, custom_topics)
+                analyser.run_per_chat_analysis(chat, engine, custom_topics, log_fn=self._log)
 
             # 3 ── Cross-chat correlation ─────────────────────────────────────
             self._log("Cross-chat correlation…")
@@ -541,13 +581,13 @@ class AnalyserAPI:
 
             # 4 ── AI calls ───────────────────────────────────────────────────
             ai_results = {
-                "people_cards":        {},
-                "narrative_vs_record": {},
+                "people_cards":          {},
+                "narrative_vs_record":   {},
                 "framework_suggestions": {},
-                "timeline_highlights": [],
-                "cross_chat_links":    [],
-                "crisis_assessed":     {},
-                "relationship_summary": {},
+                "timeline_highlights":   [],
+                "cross_chat_links":      [],
+                "crisis_assessed":       {},
+                "relationship_summary":  {},
             }
 
             if not no_ai:
@@ -575,35 +615,41 @@ class AnalyserAPI:
                 if not _ollama_ok:
                     no_ai = True
 
+            if not no_ai:
+                # ── AI ① People & sentiment cards ────────────────────────────
                 self._log("AI ① People & sentiment cards…")
                 ai_results["people_cards"] = analyser.ai_people_cards(
-                    cross_chat["merged_people"], base, model
+                    cross_chat["merged_people"], base, model, log_fn=self._log
                 )
 
-                for chat in chats:
-                    self._log(f"AI ② Narrative vs record — {chat['contact_name']}…")
-                    ai_results["narrative_vs_record"][chat["contact_name"]] = (
-                        analyser.ai_narrative_vs_record(chat, cross_chat, base, model)
+                # ── AI ②③⑨ Per-chat combined (1 call per chat) ───────────────
+                total_chats = len(chats)
+                for ci, chat in enumerate(chats, 1):
+                    self._log(
+                        f"AI ②③⑨ Analysing {chat['contact_name']} ({ci}/{total_chats})…"
                     )
+                    combined = analyser.ai_per_chat_combined(
+                        chat, cross_chat, base, model, log_fn=self._log
+                    )
+                    name = chat["contact_name"]
+                    ai_results["narrative_vs_record"][name]   = combined["narrative_vs_record"]
+                    ai_results["relationship_summary"][name]  = combined["relationship_summary"]
+                    ai_results["framework_suggestions"][name] = combined["framework_suggestions"]
 
-                for chat in chats:
-                    if chat.get("framework_content"):
-                        self._log(f"AI ③ Framework suggestions — {chat['contact_name']}…")
-                        ai_results["framework_suggestions"][chat["contact_name"]] = (
-                            analyser.ai_framework_personalisation(chat, base, model)
-                        )
-
+                # ── AI ④ Timeline highlights ──────────────────────────────────
                 self._log("AI ④ Timeline highlights…")
                 ai_results["timeline_highlights"] = analyser.ai_timeline_highlights(
-                    chats, base, model
+                    chats, base, model, log_fn=self._log
                 )
 
+                # ── AI ⑤ Cross-chat links ─────────────────────────────────────
                 if len(chats) > 1:
                     self._log("AI ⑤ Cross-chat links…")
                     ai_results["cross_chat_links"] = analyser.ai_cross_chat_links(
-                        cross_chat, chats, base, model
+                        cross_chat, chats, base, model, log_fn=self._log
                     )
 
+                # ── AI ⑥ Crisis assessment ────────────────────────────────────
                 if claude_crisis and analyser.ANTHROPIC_API_KEY:
                     self._log("AI ⑥ Crisis assessment (Claude)…")
                     for chat in chats:
@@ -615,12 +661,6 @@ class AnalyserAPI:
                             ai_results["crisis_assessed"][chat["contact_name"]] = {
                                 i: item for i, item in enumerate(assessed)
                             }
-
-                for chat in chats:
-                    self._log(f"AI ⑨ Relationship summary — {chat['contact_name']}…")
-                    ai_results["relationship_summary"][chat["contact_name"]] = (
-                        analyser.ai_relationship_summary(chat, base, model)
-                    )
 
             # Store chats for live Q&A / mood explainer calls
             self._chats = chats
@@ -642,6 +682,20 @@ class AnalyserAPI:
 
             # Inject the "← New Analysis" toolbar
             html = html.replace("<body>", "<body>" + _TOOLBAR, 1)
+
+            # 6 ── Save to history ─────────────────────────────────────────────
+            try:
+                import datetime as _dt
+                HISTORY_DIR.mkdir(exist_ok=True)
+                chat_names = "_".join(c["contact_name"][:20] for c in chats)
+                # Sanitise for filename
+                safe_name = re.sub(r"[^\w\- ]", "", chat_names).strip().replace(" ", "_")
+                stamp = _dt.datetime.now().strftime("%Y-%m-%d_%H%M")
+                history_path = HISTORY_DIR / f"{stamp}_{safe_name}.html"
+                history_path.write_text(html, encoding="utf-8")
+                self._log(f"Saved to history ✓")
+            except Exception as _he:
+                print(f"[WARN] Could not save history: {_he}")
 
             self._log("Done ✓  Loading results…")
             self._window.evaluate_js("setRunning(false)")
@@ -720,6 +774,12 @@ details[open] summary::before{transform:rotate(90deg)}
 .log-ok{color:#4ade80}
 .log-warn{color:#fbbf24}
 #apiField{display:none;margin-top:10px}
+.hist-row{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg);margin-bottom:6px;cursor:pointer;transition:background .12s}
+.hist-row:hover{background:#e9ecef}
+.hist-row .hname{flex:1;font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hist-row .hsize{font-size:11px;color:var(--muted);white-space:nowrap}
+.hist-del{background:transparent;border:none;color:#ef4444;cursor:pointer;font-size:14px;padding:2px 6px;border-radius:4px;line-height:1}
+.hist-del:hover{background:#fee2e2}
 @media(max-width:540px){.grid2{grid-template-columns:1fr}.full{grid-column:1}}
 </style>
 </head>
@@ -802,6 +862,15 @@ details[open] summary::before{transform:rotate(90deg)}
         </div>
       </div>
     </details>
+  </div>
+
+  <!-- History -->
+  <div class="card" id="historyCard" style="display:none">
+    <div class="card-head" style="margin-bottom:12px">
+      <div class="step" style="background:#4a5568">H</div>
+      <h2>Previous analyses</h2>
+    </div>
+    <div id="histList"></div>
   </div>
 
   <!-- Run -->
@@ -1091,6 +1160,40 @@ async function refreshOllamaModels(savedModel) {
   btn.textContent = '⟳ Detect models';
 }
 
+// ── History ───────────────────────────────────────────────────────────────────
+async function loadHistory() {
+  try {
+    const items = await pywebview.api.list_history();
+    const card = document.getElementById('historyCard');
+    const list = document.getElementById('histList');
+    if (!items || !items.length) { card.style.display = 'none'; return; }
+    card.style.display = 'block';
+    list.innerHTML = '';
+    items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'hist-row';
+      row.innerHTML = `<span class="hname">${item.name.replace(/_/g,' ')}</span>
+        <span class="hsize">${item.size_kb} KB</span>
+        <button class="hist-del" title="Delete" onclick="event.stopPropagation();deleteHistory(${JSON.stringify(item.path)},this.closest('.hist-row'))">✕</button>`;
+      row.addEventListener('click', () => openHistory(item.path));
+      list.appendChild(row);
+    });
+  } catch(e) { console.error('loadHistory error:', e); }
+}
+
+async function openHistory(path) {
+  await pywebview.api.open_history(path);
+}
+
+async function deleteHistory(path, row) {
+  try {
+    await pywebview.api.delete_history(path);
+    row.remove();
+    const list = document.getElementById('histList');
+    if (!list.children.length) document.getElementById('historyCard').style.display = 'none';
+  } catch(e) {}
+}
+
 // ── Restore saved config on launch ───────────────────────────────────────────
 window.addEventListener('pywebviewready', async () => {
   try {
@@ -1100,7 +1203,7 @@ window.addEventListener('pywebviewready', async () => {
   } catch(e) {}
   try {
     const c = await pywebview.api.load_config();
-    if (!c) { addChat(); refreshOllamaModels(); return; }
+    if (!c) { addChat(); refreshOllamaModels(); loadHistory(); return; }
     if (c.primary_user) document.getElementById('primaryUser').value = c.primary_user;
     if (c.ollama_url)   document.getElementById('ollamaUrl').value   = c.ollama_url;
     if (c.no_ai)        document.getElementById('noAi').checked      = true;
@@ -1108,7 +1211,8 @@ window.addEventListener('pywebviewready', async () => {
     (c.chats||[]).length ? c.chats.forEach(addChat) : addChat();
     // Auto-detect models and select the saved one
     await refreshOllamaModels(c.ollama_model || '');
-  } catch(e) { addChat(); refreshOllamaModels(); }
+    loadHistory();
+  } catch(e) { addChat(); refreshOllamaModels(); loadHistory(); }
 });
 </script>
 </body>
