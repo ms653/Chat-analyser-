@@ -43,7 +43,7 @@ CHATS = [
 
 OUTPUT_FILE = "analysis.html"
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "gemma4"          # adjust to your installed model name
+OLLAMA_MODEL = "gemma4:e4b"      # 4-bit quantised — faster and cooler on Apple Silicon
 ANTHROPIC_API_KEY = ""           # optional — only for crisis assessment
 CRISIS_AI_ASSESSMENT = False     # set True to enable Claude API for crisis review
 NLP_ENGINE = "transformers"      # "transformers" or "textblob"
@@ -372,14 +372,23 @@ def _load_affect_aggregator() -> LocalAffectAggregator:
     if _affect_aggregator is not None:
         return _affect_aggregator  # type: ignore[return-value]
     try:
+        import torch
         from transformers import pipeline as hf_pipeline
-        print("[INFO] Loading emotion model (j-hartmann/emotion-english-distilroberta-base)…")
+        # Use MPS on Apple Silicon for faster, cooler inference; fall back to CPU
+        if torch.backends.mps.is_available():
+            _device = "mps"
+        elif torch.cuda.is_available():
+            _device = "cuda"
+        else:
+            _device = "cpu"
+        print(f"[INFO] Loading emotion model on {_device}…")
         pipe = hf_pipeline(
             "text-classification",
             model="j-hartmann/emotion-english-distilroberta-base",
             return_all_scores=True,
             truncation=True,
             max_length=512,
+            device=_device,
         )
         print("[INFO] Emotion model loaded.")
         _affect_aggregator = LocalAffectAggregator(pipe)

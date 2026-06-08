@@ -491,7 +491,7 @@ class AnalyserAPI:
             # ── Patch analyser module globals from GUI config ────────────────
             analyser.PRIMARY_USER_NAME = config.get("primary_user", "")
             analyser.OLLAMA_BASE_URL   = config.get("ollama_url", "http://localhost:11434")
-            analyser.OLLAMA_MODEL      = config.get("ollama_model", "gemma4")
+            analyser.OLLAMA_MODEL      = config.get("ollama_model", "gemma4:e4b")
             analyser.ANTHROPIC_API_KEY = config.get("api_key", "")
 
             no_ai         = config.get("no_ai", False)
@@ -501,7 +501,7 @@ class AnalyserAPI:
 
             # Store Ollama config for live API calls
             self._ollama_base  = config.get("ollama_url", "http://localhost:11434")
-            self._ollama_model = config.get("ollama_model", "gemma4")
+            self._ollama_model = config.get("ollama_model", "gemma4:e4b")
 
             # 1 ── Parse chats ────────────────────────────────────────────────
             chats_cfg = config.get("chats", [])
