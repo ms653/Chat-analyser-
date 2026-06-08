@@ -794,6 +794,25 @@ def compute_emotion_summary(chat: dict) -> dict:
     }
 
 
+def compute_emotion_monthly(chat: dict) -> dict:
+    """Monthly dominant-emotion counts, ready for stacked chart rendering."""
+    month_counts: dict = defaultdict(Counter)
+    for msg in chat["messages"]:
+        dominant = msg.get("sentiment", {}).get("dominant_emotion", "neutral")
+        date = msg.get("date")
+        if not date:
+            continue
+        if isinstance(date, str):
+            try:
+                date = datetime.date.fromisoformat(date)
+            except ValueError:
+                continue
+        month_counts[f"{date.year}-{date.month:02d}"][dominant] += 1
+    months = sorted(month_counts.keys())
+    series = {e: [month_counts[m].get(e, 0) for m in months] for e in _EKMAN_LABELS}
+    return {"months": months, "series": series}
+
+
 def compute_coping_summary(chat: dict) -> dict:
     """Run DRIVE coping classifier over every message and aggregate results."""
     pos_count = neg_count = 0
@@ -1320,6 +1339,7 @@ def run_per_chat_analysis(chat: dict, engine: str, custom_topics: list) -> None:
         "lda_topics": run_lda_topics(chat["messages"]),
         "people": extract_person_mentions(chat),
         "emotion_summary": compute_emotion_summary(chat),
+        "emotion_monthly": compute_emotion_monthly(chat),
         "coping_summary": compute_coping_summary(chat),
         "distress_signals": [
             {"date": str(m["date"]), "text": m["text"][:300], "sender": m["sender"]}
@@ -1898,6 +1918,7 @@ def generate_html(
             "relationship_summary": ai_results.get("relationship_summary", {}).get(chat["contact_name"], ""),
             "message_count": len(chat["messages"]),
             "emotion_summary": a["emotion_summary"],
+            "emotion_monthly": a["emotion_monthly"],
             "coping_summary": a["coping_summary"],
             "messages_for_timeline": [
                 {
@@ -2025,6 +2046,9 @@ a{{color:var(--contact)}}
 .crisis-content{{display:none}}
 .crisis-safe{{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--radius);padding:14px;font-size:14px;margin-top:16px}}
 .no-data{{color:var(--muted);font-size:14px;text-align:center;padding:32px}}
+.chart-toggle-bar{{display:flex;gap:6px;margin-bottom:10px}}
+.chart-toggle{{padding:4px 14px;border:1.5px solid var(--border);border-radius:20px;font-size:12px;cursor:pointer;background:var(--surface);color:var(--muted);transition:all .15s}}
+.chart-toggle.active{{background:var(--contact);color:#fff;border-color:var(--contact)}}
 .notes-toolbar{{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;box-shadow:var(--shadow)}}
 .btn-note-action{{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;color:var(--text)}}
 .btn-note-action:hover{{background:var(--contact);color:#fff;border-color:var(--contact)}}
@@ -2580,6 +2604,79 @@ function renderVisits(el, chat) {{
 }}
 
 // ── Sentiment chart ────────────────────────────────────────────────────────
+// ── Stacked chart toggle helper ───────────────────────────────────────────
+// Used by both Emotion over Time and Topics Over Time charts.
+// Stores the raw series data on the button bar so we can re-render on toggle.
+function _buildStackedDatasets(series, colorMap, months) {{
+  return Object.keys(series).map(function(key) {{
+    const color = colorMap[key] || "#9ca3af";
+    return {{
+      label: key,
+      data: series[key],
+      backgroundColor: color + "cc",
+      borderColor: color,
+      borderWidth: 1.5,
+      fill: true,
+      tension: 0.3,
+      pointRadius: 2,
+    }};
+  }});
+}}
+
+function _build100Datasets(series, colorMap, months) {{
+  const totals = months.map((_,i) =>
+    Object.values(series).reduce((s, arr) => s + (arr[i] || 0), 0) || 1
+  );
+  return Object.keys(series).map(function(key) {{
+    const color = colorMap[key] || "#9ca3af";
+    return {{
+      label: key,
+      data: series[key].map((v,i) => Math.round(v / totals[i] * 100)),
+      backgroundColor: color + "cc",
+      borderColor: color,
+      borderWidth: 1,
+      fill: true,
+    }};
+  }});
+}}
+
+function drawToggleChart(canvasId, series, colorMap, months, mode) {{
+  destroyChart(canvasId);
+  const ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  const datasets = mode === "stack"
+    ? _build100Datasets(series, colorMap, months)
+    : _buildStackedDatasets(series, colorMap, months);
+  const isStack = mode === "stack";
+  charts[canvasId] = new Chart(ctx, {{
+    type: isStack ? "bar" : "line",
+    data: {{ labels: months, datasets }},
+    options: {{
+      responsive: true, maintainAspectRatio: false,
+      scales: {{
+        x: {{ stacked: true, ticks: {{ font: {{ size: 11 }} }} }},
+        y: {{
+          stacked: true,
+          ticks: {{ font: {{ size: 11 }}, callback: isStack ? (v=>v+"%") : undefined }},
+          max: isStack ? 100 : undefined,
+        }},
+      }},
+      plugins: {{ legend: {{ position: "bottom", labels: {{ boxWidth: 12, font: {{ size: 11 }} }} }} }},
+    }},
+  }});
+}}
+
+function switchChartMode(canvasId, mode, btn) {{
+  btn.closest(".chart-toggle-bar").querySelectorAll(".chart-toggle")
+    .forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  const wrap = btn.closest(".chart-section-wrap");
+  const series = JSON.parse(wrap.dataset.series);
+  const colorMap = JSON.parse(wrap.dataset.colormap);
+  const months = JSON.parse(wrap.dataset.months);
+  requestAnimationFrame(() => drawToggleChart(canvasId, series, colorMap, months, mode));
+}}
+
 function renderSentimentChart(el, chats) {{
   el.innerHTML=`
     <div class="card">
@@ -2823,6 +2920,9 @@ function renderSentimentChart(el, chats) {{
     }});
   }});
 
+  // ── Emotion over time ────────────────────────────────────────────────────
+  renderEmotionOverTime(el, chats);
+
   // ── Emotion breakdown ─────────────────────────────────────────────────────
   chats.forEach(function(chat){{
     const emoSum=chat.emotion_summary||{{}};
@@ -2863,6 +2963,38 @@ function renderSentimentChart(el, chats) {{
         }}
       }});
     }});
+  }});
+}}
+
+// ── Emotion over Time ─────────────────────────────────────────────────────
+function renderEmotionOverTime(el, chats) {{
+  const ECOL = EMOTION_COLORS;
+  const EMO_ORDER = ["joy","surprise","neutral","fear","disgust","sadness","anger"];
+  chats.forEach(function(chat) {{
+    const emo = chat.emotion_monthly;
+    if (!emo || !emo.months || emo.months.length < 2) return;
+    // reorder series so positive emotions are at base of stack
+    const orderedSeries = {{}};
+    EMO_ORDER.forEach(e => {{ if (emo.series[e]) orderedSeries[e] = emo.series[e]; }});
+    const canvasId = "emoTimeChart_" + chat.id;
+    const seriesJson = JSON.stringify(orderedSeries).replace(/"/g,'&quot;');
+    const colormapJson = JSON.stringify(ECOL).replace(/"/g,'&quot;');
+    const monthsJson = JSON.stringify(emo.months).replace(/"/g,'&quot;');
+    const section = document.createElement("div");
+    section.className = "card chart-section-wrap";
+    section.dataset.series = JSON.stringify(orderedSeries);
+    section.dataset.colormap = JSON.stringify(ECOL);
+    section.dataset.months = JSON.stringify(emo.months);
+    section.innerHTML = `
+      <h2 style="margin-bottom:4px">Emotions Over Time</h2>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Monthly breakdown of dominant emotion per message.</p>
+      <div class="chart-toggle-bar">
+        <button class="chart-toggle active" onclick="switchChartMode('${{canvasId}}','trend',this)">Trend</button>
+        <button class="chart-toggle" onclick="switchChartMode('${{canvasId}}','stack',this)">100% Stack</button>
+      </div>
+      <div style="position:relative;height:240px"><canvas id="${{canvasId}}"></canvas></div>`;
+    el.appendChild(section);
+    requestAnimationFrame(() => drawToggleChart(canvasId, orderedSeries, ECOL, emo.months, "trend"));
   }});
 }}
 
@@ -3171,7 +3303,16 @@ function renderTopics(el, chats) {{
     if(lda.months&&lda.months.length>1&&lda.series){{
       anyLda=true;
       const canvasId="ldaChart_"+chat.id;
-      html+=`<div style="margin-bottom:24px">
+      const ldaSeriesJson=JSON.stringify(lda.series).replace(/"/g,'&quot;');
+      const ldaColorMap={{}};
+      Object.keys(lda.series).forEach((l,i)=>{{ ldaColorMap[l]=TOPIC_COLORS[i%TOPIC_COLORS.length]; }});
+      const ldaColorJson=JSON.stringify(ldaColorMap).replace(/"/g,'&quot;');
+      const ldaMonthsJson=JSON.stringify(lda.months).replace(/"/g,'&quot;');
+      html+=`<div class="chart-section-wrap" data-series="${{ldaSeriesJson}}" data-colormap="${{ldaColorJson}}" data-months="${{ldaMonthsJson}}" style="margin-bottom:24px">
+        <div class="chart-toggle-bar">
+          <button class="chart-toggle active" onclick="switchChartMode('${{canvasId}}','trend',this)">Trend</button>
+          <button class="chart-toggle" onclick="switchChartMode('${{canvasId}}','stack',this)">100% Stack</button>
+        </div>
         <div style="position:relative;height:200px"><canvas id="${{canvasId}}"></canvas></div>
         <p style="font-size:11px;color:var(--muted);margin:6px 0 8px;text-align:center">Click a topic card to isolate it · click again to restore all</p>
         <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:8px" id="lda-cards-${{canvasId}}">`;
@@ -3215,31 +3356,9 @@ function renderTopics(el, chats) {{
     const lda=chat.lda_topics||{{}};
     if(!lda.months||lda.months.length<=1||!lda.series) return;
     const canvasId="ldaChart_"+chat.id;
-    requestAnimationFrame(function(){{
-      destroyChart(canvasId);
-      const ctx=document.getElementById(canvasId); if(!ctx) return;
-      const labels=Object.keys(lda.series);
-      charts[canvasId]=new Chart(ctx,{{
-        type:"line",
-        data:{{
-          labels:lda.months,
-          datasets:labels.map(function(label,i){{
-            return {{
-              label:label,
-              data:lda.series[label],
-              borderColor:TOPIC_COLORS[i%TOPIC_COLORS.length],
-              backgroundColor:TOPIC_COLORS[i%TOPIC_COLORS.length]+"33",
-              fill:true,tension:0.3,pointRadius:2,borderWidth:2
-            }};
-          }})
-        }},
-        options:{{
-          responsive:true,maintainAspectRatio:false,
-          scales:{{x:{{ticks:{{font:{{size:11}}}}}},y:{{stacked:false,ticks:{{font:{{size:11}}}}}}}},
-          plugins:{{legend:{{position:"bottom",labels:{{boxWidth:12,font:{{size:11}}}}}}}}
-        }}
-      }});
-    }});
+    const colorMap={{}};
+    Object.keys(lda.series).forEach((l,i)=>{{ colorMap[l]=TOPIC_COLORS[i%TOPIC_COLORS.length]; }});
+    requestAnimationFrame(()=>drawToggleChart(canvasId, lda.series, colorMap, lda.months, "trend"));
   }});
 }}
 
