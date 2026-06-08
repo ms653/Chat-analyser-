@@ -427,10 +427,68 @@ FINANCIAL_KW = [
     r"\b(bills|rent|electricity|gas|mortgage).{0,20}(can['']t|struggling|behind|overdue)\b",
 ]
 
+# DRIVE coping framework patterns
+COPING_PATTERNS: dict = {
+    "positive": {
+        "self_care": [
+            r"\b(self.?care|looking after (my|your)self|taking care of (my|your)self)\b",
+            r"\b(had a (bath|walk|rest|nap)|went for a (walk|run)|getting (some )?rest)\b",
+            r"\b(setting (a |my )?(boundary|boundaries|limits)|healthy (routine|habit))\b",
+            r"\b(eating (well|better|healthily)|drinking (more )?water|exercise)\b",
+        ],
+        "seeking_help": [
+            r"\b(therapy|therapist|counsell(ing|or)|seeing someone|talking to someone)\b",
+            r"\b(doctor['']?s? (appointment|appointment)|GP|mental health (worker|team|support))\b",
+            r"\b(rang (the )?(helpline|samaritans|crisis line)|called for help|crisis team)\b",
+            r"\b(support group|group therapy|CBT|DBT|mindfulness class)\b",
+        ],
+        "prayer_meditation": [
+            r"\b(pray(ed|ing)?|prayer|meditat(e|ed|ing|ion)|mindful(ness)?)\b",
+            r"\b(deep breath(s|ing)?|breathing exercise|grounding (exercise|technique))\b",
+            r"\b(spiritual(ity)?|my faith|god (helped|got me through)|gratitude)\b",
+        ],
+        "adaptive_humor": [
+            r"\b(laugh(ed|ing)? about it|joking|dark hum(our|or)|makes me (laugh|smile))\b",
+            r"\b(at least.{0,30}(funny|laugh)|silver lining|could (always) be worse)\b",
+            r"\b(keeping (my|a) sense of hum(our|or)|find(ing)? the funny side)\b",
+        ],
+    },
+    "negative": {
+        "hopeless": [
+            r"\b(no point|what['']s the point|nothing (will|is going to) change)\b",
+            r"\b(nothing ever changes|give up|given up|don['']t see (the point|any hope))\b",
+            r"\b(nothing I can do|out of my (control|hands)|useless (trying|fighting))\b",
+            r"\b(always (been|going to be) (like this|the same|this way))\b",
+        ],
+        "avoidance": [
+            r"\b(not thinking about (it|that)|trying not to think|ignore (it|that|the problem))\b",
+            r"\b(deal with it (later|another day|tomorrow)|put(ting)? it (off|aside))\b",
+            r"\b(binge.{0,15}(watching|eating)|losing myself in|just (escape|distract))\b",
+            r"\b(if only (things|it|everything) (were|was) different|I wish things were different)\b",
+        ],
+        "conspiracy_paranoia": [
+            r"\b(they['']re (all|out to|trying to)|nobody tells me (anything|the truth))\b",
+            r"\b(hidden (agenda|motive)|working against me|everyone([ ']s| is) against me)\b",
+            r"\b(conspiracy|cover.up|they (don['']t|never) want (me|us) to know)\b",
+        ],
+    },
+}
+
 
 def _any_pattern(text: str, patterns: list) -> bool:
     t = text.lower()
     return any(re.search(p, t) for p in patterns)
+
+
+def classify_coping(text: str) -> dict:
+    """Return DRIVE coping classification for a single message via regex."""
+    for sub_theme, patterns in COPING_PATTERNS["positive"].items():
+        if _any_pattern(text, patterns):
+            return {"strategy": "positive", "sub_theme": sub_theme}
+    for sub_theme, patterns in COPING_PATTERNS["negative"].items():
+        if _any_pattern(text, patterns):
+            return {"strategy": "negative", "sub_theme": sub_theme}
+    return {"strategy": "none", "sub_theme": "none"}
 
 
 def classify_intent(msg: dict) -> list:
@@ -625,6 +683,39 @@ def compute_emotion_summary(chat: dict) -> dict:
     }
 
 
+def compute_coping_summary(chat: dict) -> dict:
+    """Run DRIVE coping classifier over every message and aggregate results."""
+    pos_count = neg_count = 0
+    by_subtheme: Counter = Counter()
+    examples: dict = defaultdict(list)
+
+    for msg in chat["messages"]:
+        result = classify_coping(msg["text"])
+        msg["coping"] = result
+        strat = result["strategy"]
+        sub = result["sub_theme"]
+        if strat == "positive":
+            pos_count += 1
+            by_subtheme[sub] += 1
+            if len(examples[sub]) < 3:
+                examples[sub].append({"text": msg["text"][:200], "sender": msg["sender"]})
+        elif strat == "negative":
+            neg_count += 1
+            by_subtheme[sub] += 1
+            if len(examples[sub]) < 3:
+                examples[sub].append({"text": msg["text"][:200], "sender": msg["sender"]})
+
+    flagged = pos_count + neg_count or 1
+    return {
+        "positive_count": pos_count,
+        "negative_count": neg_count,
+        "positive_pct": round(pos_count / flagged * 100, 1),
+        "negative_pct": round(neg_count / flagged * 100, 1),
+        "by_subtheme": dict(by_subtheme),
+        "examples": dict(examples),
+    }
+
+
 def compute_weekly_volume(chat: dict) -> dict:
     """Message count per ISO week per sender."""
     user_by_week: dict = defaultdict(int)
@@ -795,6 +886,7 @@ def run_per_chat_analysis(chat: dict, engine: str, custom_topics: list) -> None:
         "topics": compute_topics(chat, custom_topics),
         "people": extract_person_mentions(chat),
         "emotion_summary": compute_emotion_summary(chat),
+        "coping_summary": compute_coping_summary(chat),
         "distress_signals": [
             {"date": str(m["date"]), "text": m["text"][:300], "sender": m["sender"]}
             for m in chat["messages"] if "DISTRESS_SIGNAL" in m.get("intents", [])
@@ -1135,6 +1227,32 @@ def ai_crisis_assessment_ollama(crisis_flags: list, base_url: str, model: str) -
         results.append(item)
     return results
 
+def ai_coping_analysis(chat: dict, base_url: str, model: str) -> dict:
+    """Call 7 — Gemma holistic DRIVE coping assessment for one chat."""
+    summary = chat["analytics"].get("coping_summary", {})
+    sample = []
+    for msg in chat["messages"]:
+        c = msg.get("coping", {})
+        if c.get("strategy") != "none" and len(sample) < 12:
+            sample.append(f"[{c['strategy'].upper()}/{c['sub_theme']}] {msg['text'][:150]}")
+    if not sample:
+        return {}
+    prompt = (
+        "Analyse the following chat messages classified by DRIVE coping strategy "
+        "(Demands-Resources-Individual Effects model). Provide a holistic assessment.\n\n"
+        f"Positive coping signals: {summary.get('positive_count', 0)} messages\n"
+        f"Negative coping signals: {summary.get('negative_count', 0)} messages\n"
+        f"Sub-themes: {list(summary.get('by_subtheme', {}).keys())}\n\n"
+        "Sample classified messages:\n" + "\n".join(sample) + "\n\n"
+        "Return JSON only: {\"dominant_strategy\": \"Positive|Negative|Mixed|None\", "
+        "\"primary_sub_theme\": \"...\", "
+        "\"assessment\": \"2-3 sentence plain-language summary\", "
+        "\"recommendations\": \"1-2 sentence supportive suggestion\"}"
+    )
+    raw = _ollama_chat([{"role": "user", "content": prompt}], base_url, model)
+    return _parse_json_response(raw, {})
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML GENERATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1190,6 +1308,7 @@ def generate_html(
             "framework_suggestions": ai_results.get("framework_suggestions", {}).get(chat["contact_name"], []),
             "message_count": len(chat["messages"]),
             "emotion_summary": a["emotion_summary"],
+            "coping_summary": a["coping_summary"],
             "messages_for_timeline": [
                 {
                     "date": str(m["date"]),
@@ -1367,6 +1486,7 @@ const EMOTION_COLORS = {{
 }};
 const EMOTION_LABELS = ["anger","disgust","fear","joy","neutral","sadness","surprise"];
 const CRISIS_ASSESSED = {_j(ai_results.get("crisis_assessed", {}))};
+const COPING_AI = {_j(ai_results.get("coping_analysis", {}))};
 
 let currentChat = null;
 let currentTab = "conversations";
@@ -1550,6 +1670,7 @@ function getTabsForChat(chatId) {{
     {{id:"initiation",label:"Initiation Balance",showAll:true,showSingle:true}},
     {{id:"crisis",label:"⚠ Crisis Moments",showAll:true,showSingle:true}},
     {{id:"support",label:"Support Given",showAll:true,showSingle:true}},
+    {{id:"coping",label:"Coping Dynamics",showAll:true,showSingle:true}},
     {{id:"people",label:"People & Sentiment",showAll:true,showSingle:true}},
     {{id:"narrative",label:"Narrative vs Record",showAll:false,showSingle:true}},
   ];
@@ -1632,6 +1753,7 @@ function renderMain() {{
       case "initiation": renderInitiation(el,[chat]); break;
       case "crisis": renderCrisis(el,chat); break;
       case "support": renderSupport(el,[chat]); break;
+      case "coping": renderCoping(el,[chat]); break;
       case "people": renderPeople(el); break;
       case "framework": renderFramework(el,chat); break;
       case "narrative": renderNarrative(el,chat); break;
@@ -1649,6 +1771,7 @@ function renderAllView(el) {{
     case "initiation": renderInitiation(el,CHATS); break;
     case "crisis": renderAllCrisis(el); break;
     case "support": renderSupport(el,CHATS); break;
+    case "coping": renderCoping(el,CHATS); break;
     case "people": renderPeople(el); break;
     default: renderConversationsPanel(el);
   }}
@@ -2170,6 +2293,101 @@ function renderCrisisContent(el, chats) {{
 }}
 
 // ── Support given ─────────────────────────────────────────────────────────
+// ── Coping Dynamics ───────────────────────────────────────────────────────
+function renderCoping(el, chats) {{
+  const SUB_LABELS = {{
+    self_care:"Self-Care",seeking_help:"Seeking Help",prayer_meditation:"Prayer/Meditation",
+    adaptive_humor:"Adaptive Humor",hopeless:"Hopeless/Passive",
+    avoidance:"Avoidance/Wishful",conspiracy_paranoia:"Conspiracy/Paranoia"
+  }};
+  const POS_THEMES=["self_care","seeking_help","prayer_meditation","adaptive_humor"];
+  let html=`<div class="card"><h2>Coping Dynamics</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px">
+      DRIVE framework — messages are classified into positive coping strategies
+      (self-care, seeking help, adaptive humour) and negative ones (avoidance, hopeless thinking).
+    </p>`;
+  chats.forEach(function(chat){{
+    const cs=chat.coping_summary||{{}};
+    const ai=COPING_AI[chat.name]||{{}};
+    const pos=cs.positive_count||0;
+    const neg=cs.negative_count||0;
+    const total=pos+neg||1;
+    const canvasId="copingChart_"+chat.id;
+    html+=`${{chats.length>1?`<h3 style="margin-bottom:8px">${{esc(chat.name)}}</h3>`:""}}
+      <div style="display:flex;gap:24px;align-items:center;margin-bottom:16px">
+        <div style="width:140px;height:140px;flex-shrink:0"><canvas id="${{canvasId}}"></canvas></div>
+        <div style="flex:1">
+          <div style="font-size:13px;margin-bottom:4px">
+            <span style="color:#22c55e;font-weight:600">Positive: ${{pos}}</span>
+            &nbsp;(<span>${{cs.positive_pct||0}}%</span>)
+          </div>
+          <div style="font-size:13px;margin-bottom:12px">
+            <span style="color:#ef4444;font-weight:600">Negative: ${{neg}}</span>
+            &nbsp;(<span>${{cs.negative_pct||0}}%</span>)
+          </div>
+          ${{ai.assessment?`<div style="font-size:13px;margin-bottom:6px">${{esc(ai.assessment)}}</div>`:"" }}
+          ${{ai.recommendations?`<div style="font-size:12px;color:var(--muted);font-style:italic">${{esc(ai.recommendations)}}</div>`:"" }}
+        </div>
+      </div>`;
+    // Sub-theme table
+    const by=cs.by_subtheme||{{}};
+    const subKeys=Object.keys(by).sort((a,b)=>by[b]-by[a]);
+    if(subKeys.length){{
+      html+=`<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px">
+        <thead><tr>
+          <th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Sub-theme</th>
+          <th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Type</th>
+          <th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--border)">Count</th>
+        </tr></thead><tbody>`;
+      subKeys.forEach(function(sub){{
+        const isPos=POS_THEMES.includes(sub);
+        const exs=(cs.examples||{{}})[sub]||[];
+        html+=`<tr>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--border)">${{esc(SUB_LABELS[sub]||sub)}}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--border);color:${{isPos?"#22c55e":"#ef4444"}}">${{isPos?"Positive":"Negative"}}</td>
+          <td style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--border)">${{by[sub]}}</td>
+        </tr>`;
+        if(exs.length){{
+          html+=`<tr><td colspan="3" style="padding:0 8px 8px">`;
+          exs.forEach(function(e){{
+            html+=`<div style="font-size:11px;color:var(--muted);padding:2px 0;border-left:2px solid var(--border);padding-left:6px;margin-top:2px">
+              <b>${{esc(e.sender)}}:</b> "${{esc(e.text.slice(0,140))}}"</div>`;
+          }});
+          html+=`</td></tr>`;
+        }}
+      }});
+      html+=`</tbody></table>`;
+    }} else {{
+      html+=`<p class="no-data">No coping signals detected in this chat.</p>`;
+    }}
+  }});
+  html+=`</div>`;
+  el.innerHTML=html;
+  // Render donut charts after DOM is set
+  chats.forEach(function(chat){{
+    const cs=chat.coping_summary||{{}};
+    const pos=cs.positive_count||0;
+    const neg=cs.negative_count||0;
+    if(pos+neg===0) return;
+    const canvasId="copingChart_"+chat.id;
+    requestAnimationFrame(function(){{
+      destroyChart(canvasId);
+      const ctx=document.getElementById(canvasId); if(!ctx) return;
+      charts[canvasId]=new Chart(ctx,{{
+        type:"doughnut",
+        data:{{
+          labels:["Positive","Negative"],
+          datasets:[{{data:[pos,neg],backgroundColor:["#22c55e","#ef4444"],borderWidth:1}}]
+        }},
+        options:{{
+          responsive:true,maintainAspectRatio:true,
+          plugins:{{legend:{{position:"bottom",labels:{{boxWidth:12,font:{{size:11}}}}}}}}
+        }}
+      }});
+    }});
+  }});
+}}
+
 function renderSupport(el, chats) {{
   let html=`<div class="card"><h2>Support Given (financial & practical)</h2>`;
   let anyItem=false;
@@ -2378,6 +2596,7 @@ def main():
         "timeline_highlights": [],
         "cross_chat_links": [],
         "crisis_assessed": {},
+        "coping_analysis": {},
     }
 
     if use_ai:
@@ -2423,6 +2642,13 @@ def main():
             ai_results["crisis_assessed"][chat["contact_name"]] = {
                 i: item for i, item in enumerate(assessed)
             }
+
+        # Call 7 — DRIVE coping analysis (per chat)
+        for chat in chats:
+            print(f"[AI] Coping analysis for {chat['contact_name']}…")
+            ai_results["coping_analysis"][chat["contact_name"]] = ai_coping_analysis(
+                chat, base_url, model
+            )
 
     # ── Token log
     if args.log_tokens and TOKEN_LOG:
