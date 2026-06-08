@@ -154,6 +154,16 @@ class AnalyserAPI:
         """Return sender names found in the chat file, most frequent first."""
         return analyser.detect_senders(file_path)
 
+    def get_ollama_models(self, url: str) -> list:
+        """Query Ollama at the given URL and return a list of installed model names."""
+        try:
+            import requests as _req
+            r = _req.get(f"{url.rstrip('/')}/api/tags", timeout=5)
+            r.raise_for_status()
+            return [m["name"] for m in r.json().get("models", [])]
+        except Exception as e:
+            return []
+
     # ── Notes persistence (disk) ─────────────────────────────────────────────
     # Called from JS in the results HTML so notes survive browser storage resets
     # and HTML regenerations. Keyed by noteKey(chatId, date) strings.
@@ -743,17 +753,22 @@ details[open] summary::before{transform:rotate(90deg)}
   <div class="card">
     <div class="card-head"><div class="step">3</div><h2>Settings</h2></div>
 
-    <details style="margin-bottom:14px">
+    <details style="margin-bottom:14px" id="ollamaDetails">
       <summary>Ollama (local AI)</summary>
-      <div class="detail-body grid2">
-        <div class="fld">
+      <div class="detail-body">
+        <div class="fld" style="margin-bottom:12px">
           <label for="ollamaUrl">Ollama URL</label>
-          <input type="text" id="ollamaUrl" value="http://localhost:11434">
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="text" id="ollamaUrl" value="http://localhost:11434" style="flex:1" oninput="scheduleModelRefresh()">
+            <button class="btn btn-ghost" style="white-space:nowrap;font-size:13px" onclick="refreshOllamaModels()" id="ollamaRefreshBtn">⟳ Detect models</button>
+          </div>
         </div>
         <div class="fld">
           <label for="ollamaModel">Model</label>
-          <input type="text" id="ollamaModel" value="gemma4">
-          <p class="hint">Run <code>ollama list</code> to see installed models</p>
+          <select id="ollamaModel" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:var(--radius);font-size:14px;background:var(--surface);color:var(--text)">
+            <option value="">— click Detect models —</option>
+          </select>
+          <p class="hint" id="ollamaHint" style="margin-top:4px"></p>
         </div>
       </div>
     </details>
@@ -1035,24 +1050,65 @@ async function relaunch() {
   await pywebview.api.relaunch();
 }
 
+// ── Ollama model detection ────────────────────────────────────────────────────
+let _modelRefreshTimer = null;
+function scheduleModelRefresh() {
+  clearTimeout(_modelRefreshTimer);
+  _modelRefreshTimer = setTimeout(refreshOllamaModels, 800);
+}
+
+async function refreshOllamaModels(savedModel) {
+  const url = document.getElementById('ollamaUrl').value.trim();
+  const btn = document.getElementById('ollamaRefreshBtn');
+  const hint = document.getElementById('ollamaHint');
+  const sel = document.getElementById('ollamaModel');
+  btn.disabled = true;
+  btn.textContent = '⟳ Detecting…';
+  hint.textContent = '';
+  try {
+    const models = await pywebview.api.get_ollama_models(url);
+    sel.innerHTML = '';
+    if (!models || !models.length) {
+      sel.innerHTML = '<option value="">— no models found —</option>';
+      hint.style.color = '#ef4444';
+      hint.textContent = 'Ollama is not reachable or has no models installed.';
+    } else {
+      models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m; opt.textContent = m;
+        if (m === savedModel || (!savedModel && models.indexOf(m) === 0)) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      hint.style.color = '#059669';
+      hint.textContent = `${models.length} model${models.length>1?'s':''} found.`;
+    }
+  } catch(e) {
+    sel.innerHTML = '<option value="">— detection failed —</option>';
+    hint.style.color = '#ef4444';
+    hint.textContent = 'Could not reach Ollama.';
+  }
+  btn.disabled = false;
+  btn.textContent = '⟳ Detect models';
+}
+
 // ── Restore saved config on launch ───────────────────────────────────────────
 window.addEventListener('pywebviewready', async () => {
   try {
-    // Load version
     const v = await pywebview.api.get_version();
     document.getElementById('versionLabel').textContent =
       v.hash !== 'unknown' ? `${v.hash} · ${v.date}` : 'unknown';
   } catch(e) {}
   try {
     const c = await pywebview.api.load_config();
-    if (!c) { addChat(); return; }
+    if (!c) { addChat(); refreshOllamaModels(); return; }
     if (c.primary_user) document.getElementById('primaryUser').value = c.primary_user;
     if (c.ollama_url)   document.getElementById('ollamaUrl').value   = c.ollama_url;
-    if (c.ollama_model) document.getElementById('ollamaModel').value = c.ollama_model;
     if (c.no_ai)        document.getElementById('noAi').checked      = true;
     if (c.api_key)      document.getElementById('apiKey').value      = c.api_key;
     (c.chats||[]).length ? c.chats.forEach(addChat) : addChat();
-  } catch(e) { addChat(); }
+    // Auto-detect models and select the saved one
+    await refreshOllamaModels(c.ollama_model || '');
+  } catch(e) { addChat(); refreshOllamaModels(); }
 });
 </script>
 </body>
