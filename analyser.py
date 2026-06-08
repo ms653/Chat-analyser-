@@ -363,10 +363,42 @@ class LocalAffectAggregator:
             "dominant_emotion": dominant,
         }
 
-    def score_batch(self, texts: list, batch_size: int = 32, log_fn=None) -> list:
-        """Score a list of texts in batches for MPS/GPU efficiency (10-30x faster than one-by-one)."""
+    def _score_one_clean(self, clean_text: str, emoji_scores: list) -> dict:
+        """Score a single pre-cleaned text string (no emoji stripping)."""
+        emotions = {e: 0.0 for e in _EKMAN_LABELS}
+        if self._pipeline and clean_text.strip():
+            try:
+                raw = self._pipeline(clean_text[:512])
+                items = raw[0] if isinstance(raw[0], list) else raw
+                for item in items:
+                    lbl = item["label"].lower()
+                    if lbl in emotions:
+                        emotions[lbl] = round(item["score"], 4)
+            except Exception:
+                emotions["neutral"] = 1.0
+        else:
+            emotions["neutral"] = 1.0
+        dominant = max(emotions, key=emotions.get)
+        avg_emoji = sum(emoji_scores) / len(emoji_scores) if emoji_scores else 0.0
+        composite = round(
+            0.7 * (emotions["joy"] - emotions["sadness"] - 0.5 * emotions["anger"])
+            + 0.3 * avg_emoji, 4,
+        )
+        composite = max(-1.0, min(1.0, composite))
+        label = "positive" if composite > 0.1 else "negative" if composite < -0.1 else "neutral"
+        return {
+            "label": label, "score": composite,
+            "emotions": emotions, "composite_valence": composite,
+            "emoji_sentiment": round(avg_emoji, 4), "dominant_emotion": dominant,
+        }
+
+    def score_batch(self, texts: list, batch_size: int = 16, log_fn=None) -> list:
+        """Score a list of texts in batches for MPS/GPU efficiency.
+
+        Falls back to individual scoring per message if the batch call fails,
+        so a pipeline error never silently zeroes out all sentiment scores.
+        """
         n = len(texts)
-        results: list = [None] * n
 
         # Pre-process: strip emojis, collect emoji sentiment per text
         clean_texts: list = []
@@ -389,12 +421,15 @@ class LocalAffectAggregator:
             clean_texts.append(clean)
             emoji_score_lists.append(evals)
 
-        # Batch inference through HF pipeline
+        results: list = [None] * n
+        _batch_ok = True  # flips False on first batch failure → individual mode
+
         if self._pipeline:
             for start in range(0, n, batch_size):
                 end = min(start + batch_size, n)
-                if log_fn and start > 0 and start % (batch_size * 4) == 0:
+                if log_fn and start > 0 and start % (batch_size * 8) == 0:
                     log_fn(f"  Emotion scoring: {end:,}/{n:,} messages…")
+
                 # Collect valid (non-empty) texts in this slice
                 valid_idx: list = []
                 valid_texts: list = []
@@ -405,6 +440,13 @@ class LocalAffectAggregator:
                         valid_texts.append(t[:512])
                 if not valid_texts:
                     continue
+
+                if not _batch_ok:
+                    # Batch mode failed earlier — score individually
+                    for abs_i, t in zip(valid_idx, valid_texts):
+                        results[abs_i] = self._score_one_clean(t, emoji_score_lists[abs_i])
+                    continue
+
                 try:
                     raw_batch = self._pipeline(valid_texts)
                     for abs_i, result in zip(valid_idx, raw_batch):
@@ -415,8 +457,12 @@ class LocalAffectAggregator:
                             if lbl in emo:
                                 emo[lbl] = round(item["score"], 4)
                         results[abs_i] = (emo, emoji_score_lists[abs_i])
-                except Exception:
-                    pass  # leave results[i] = None → neutral fallback below
+                except Exception as _batch_err:
+                    print(f"[WARN] Batch emotion scoring failed ({_batch_err}); switching to individual mode.")
+                    _batch_ok = False
+                    # Retry this slice individually
+                    for abs_i, t in zip(valid_idx, valid_texts):
+                        results[abs_i] = self._score_one_clean(t, emoji_score_lists[abs_i])
 
         # Build final sentiment dicts
         final: list = []
@@ -426,30 +472,27 @@ class LocalAffectAggregator:
                 continue
             r = results[i]
             if r is None:
-                final.append(_neutral_sentiment())
+                # No pipeline — use TextBlob fallback
+                final.append(score_sentiment_textblob(text))
+                continue
+            # r is either a (emotions_dict, emoji_list) tuple from batch mode
+            # or a fully-formed sentiment dict from individual mode
+            if isinstance(r, dict):
+                final.append(r)
                 continue
             emotions, emoji_scores = r
             dominant = max(emotions, key=emotions.get)
             avg_emoji = sum(emoji_scores) / len(emoji_scores) if emoji_scores else 0.0
             composite = round(
                 0.7 * (emotions["joy"] - emotions["sadness"] - 0.5 * emotions["anger"])
-                + 0.3 * avg_emoji,
-                4,
+                + 0.3 * avg_emoji, 4,
             )
             composite = max(-1.0, min(1.0, composite))
-            if composite > 0.1:
-                label = "positive"
-            elif composite < -0.1:
-                label = "negative"
-            else:
-                label = "neutral"
+            label = "positive" if composite > 0.1 else "negative" if composite < -0.1 else "neutral"
             final.append({
-                "label": label,
-                "score": composite,
-                "emotions": emotions,
-                "composite_valence": composite,
-                "emoji_sentiment": round(avg_emoji, 4),
-                "dominant_emotion": dominant,
+                "label": label, "score": composite,
+                "emotions": emotions, "composite_valence": composite,
+                "emoji_sentiment": round(avg_emoji, 4), "dominant_emotion": dominant,
             })
         return final
 
