@@ -283,3 +283,110 @@ After each phase, verify as follows:
 7. **Phase 7**: Feed an iOS export with `[DD/MM/YYYY, HH:MM:SS]` format; confirm all
    messages parse correctly with no timestamp misses.
 8. **Phase 8**: Run `pytest` — all tests green.
+
+---
+
+## Known Bugs (to fix before or alongside the phases above)
+
+These are existing defects in the current app, noted here so they are not accidentally
+left unfixed if the relevant phases already touch the same code.
+
+---
+
+### Bug A — Person Mentions Includes Non-Names ("Xmas", "And", etc.)
+
+**Root cause:** `extract_person_mentions()` (`analyser.py` line 550) uses a bare regex
+`r"\b[A-Z][a-z]{2,}\b"` to capture capitalised words. This catches:
+- Any word at the **start of a sentence** (always capitalised in natural writing).
+- Seasonal/cultural nouns: "Xmas", "Christmas", "Easter", "Halloween".
+- Common nouns used mid-sentence when emphasised: "Thanks", "Love", "Hope".
+- Conjunction fragments that got capitalised by autocorrect.
+
+The STOP list at lines 558–566 is too small to cover these cases.
+
+**Fix:**
+1. Expand the STOP list with common non-name capitalised words (seasonal terms,
+   common nouns, discourse words: Thanks, Love, Hope, Sorry, God, Dear, Happy,
+   Xmas, Christmas, Easter, Halloween, Yeah, Nah, etc.).
+2. Filter out words that appear as the **first token** of a sentence (split on
+   `.`, `!`, `?`, `\n` and discard the leading word of each fragment unless it
+   also appears capitalised mid-sentence).
+3. Raise the minimum mention count threshold from 3 to **4** to reduce noise.
+4. When spaCy is available (Phase 4), replace the whole heuristic with
+   `spaCy` NER (`en_core_web_sm` PERSON entity type) as the authoritative filter.
+
+**File:** `analyser.py` `extract_person_mentions()` (line 550)
+
+---
+
+### Bug B — "People & Sentiment" Tab Shows All Chats Regardless of Selected Conversation
+
+**Root cause:** `renderPeople(el)` (`analyser.py` line 1909) always iterates over
+the global `PEOPLE` JavaScript constant, which is populated from
+`cross_chat["merged_people"]` — the union of all chats. There is no filter on
+`currentChat`, so switching conversations does not change the people displayed.
+
+**Fix:**
+- Pass per-chat people data into the HTML alongside the merged set. The serialised
+  chat data objects (built from line 940 onwards) should each include their own
+  `people` dict from `chat["analytics"]["people"]`.
+- In `renderPeople(el)`, branch on `currentChat`:
+  - If `currentChat === "all"` → use global `PEOPLE` (existing behaviour).
+  - If a specific chat is selected → filter to only entries where `p.chats`
+    includes the current contact name, **or** use the per-chat people dict
+    directly from `CHATS[currentChat].people`.
+- Also update the "×N mentions · Chat Name" label to reflect per-chat counts when
+  in single-chat view.
+
+**File:** `analyser.py` `generate_html()` data serialisation (~line 960) and
+`renderPeople` JS function (~line 1909).
+
+---
+
+### Bug C — Crisis Detection Misses Serious Signals; LLM Assessment Has No Context
+
+**Root cause — narrow keyword patterns:**
+`CRISIS_KW` (line 317) only matches a small set of explicit phrases ("want to die",
+"kill myself", "suicide", "self-harm", "took pills"). It misses common indirect
+or fragmented expressions of suicidal ideation and self-harm, e.g.:
+- "I've been cutting again", "cut myself last night"
+- "I don't want to be here anymore / any more"
+- "I'm not going to be around much longer"
+- "I've had enough, I can't keep doing this"
+- "things would be better without me"
+- "I've been hurting myself"
+- Repeated references to specific methods without the word "suicide"
+
+**Fix — expand CRISIS_KW:**
+Add patterns covering these categories:
+- Self-harm verbs: `r"\b(cutting|cut myself|hurt(ing)? myself|burn(ing)? myself)\b"`
+- Passive suicidal ideation: `r"\b(don['']t want to be here|not want(ing)? to exist|can['']t keep (going|doing this))\b"`
+- Indirect method references: `r"\b(took.{0,20}(too many|all my|loads of).{0,10}(pills|tablets))\b"`
+- Burden statements: `r"\b(everyone.{0,20}better off without me|better off (dead|gone|if I wasn['']t here))\b"`
+
+**Root cause — LLM prompt strips context:**
+`ai_crisis_assessment_claude()` (line 877) sends only isolated message excerpts to
+the LLM, with no surrounding conversation context and no instruction to look for
+patterns across multiple messages. The prompt (line 888) asks only whether each
+excerpt is "genuine distress, rhetorical/emotional expression, or unclear" — it does
+not ask the model to consider escalation, repetition, or cumulative severity.
+
+There is also **no Gemma/Ollama path** for crisis AI assessment. With `--local-only`,
+zero AI verification occurs. The `--claude-crisis` flag is the only route to any LLM
+review.
+
+**Fix — improve the prompt and add local Gemma path:**
+1. Include a **sliding window of 3–5 surrounding messages** as context when sending
+   each flagged excerpt to the LLM, so the model can assess tone and escalation.
+2. Rewrite the prompt to explicitly ask:
+   - Is this part of a pattern of repeated expressions, or isolated?
+   - Does the surrounding context suggest the person is in genuine distress?
+   - Is there evidence of planning or prior self-harm (not just ideation)?
+3. Add a **Gemma/Ollama crisis assessment path** (parallel to the Claude path) that
+   activates when `--local-only` is set or no `ANTHROPIC_API_KEY` is configured.
+   Reuse `_ollama_chat()` with the same improved prompt and structured JSON output.
+4. Surface cumulative counts ("this contact has expressed crisis-level language N
+   times across the chat history") in the Crisis Moments tab.
+
+**Files:** `analyser.py` `CRISIS_KW` (line 317), `ai_crisis_assessment_claude()`
+(line 877), `generate_html()` crisis section (~line 1860).
