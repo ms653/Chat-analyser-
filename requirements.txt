@@ -26,6 +26,10 @@ nltk>=3.8
 # Topic modelling — LDA
 gensim>=4.3.0
 
+# Relationship network topology
+networkx>=3.2
+python-louvain>=0.16
+
 # Optional — Claude API for crisis assessment
 # Only needed if CRISIS_AI_ASSESSMENT = True
 anthropic>=0.28.0

@@ -1604,6 +1604,91 @@ def _date_range(chats: list) -> str:
     return f"{min(all_dates)} – {max(all_dates)}"
 
 
+class InteractiveTopologyGenerator:
+    """Build entity-interaction network from people/ABSA data and render as Plotly JSON."""
+
+    def __init__(self, people: dict):
+        self.people = people
+
+    def construct_interaction_graph(self):
+        try:
+            import networkx as nx
+        except ImportError:
+            return None
+        G = nx.Graph()
+        for name, data in self.people.items():
+            avg_v = data.get("avg_valence", 0.0)
+            G.add_node(name, avg_valence=avg_v, count=data.get("count", 1), is_contact=False)
+            for chat_name in data.get("chats", []):
+                if not G.has_node(chat_name):
+                    G.add_node(chat_name, avg_valence=0.0, count=0, is_contact=True)
+                if G.has_edge(chat_name, name):
+                    G[chat_name][name]["weight"] += data.get("count", 1)
+                    G[chat_name][name]["valences"].append(avg_v)
+                else:
+                    G.add_edge(chat_name, name, weight=data.get("count", 1), valences=[avg_v])
+        return G
+
+    def generate_plotly_figure(self, G) -> dict:
+        try:
+            import networkx as nx
+        except ImportError:
+            return {}
+        if G is None or len(G.nodes) < 2:
+            return {}
+        pos = nx.spring_layout(G, seed=42, k=2.0)
+        degree_centrality = nx.degree_centrality(G)
+
+        edge_x, edge_y = [], []
+        for u, v in G.edges():
+            x0, y0 = pos[u]
+            x1, y1 = pos[v]
+            edge_x += [x0, x1, None]
+            edge_y += [y0, y1, None]
+
+        node_x, node_y, node_colors, node_sizes, node_hover = [], [], [], [], []
+        for n in G.nodes():
+            nd = G.nodes[n]
+            avg_v = nd.get("avg_valence", 0.0)
+            centrality = degree_centrality.get(n, 0.0)
+            cnt = nd.get("count", 1)
+            is_contact = nd.get("is_contact", False)
+            if avg_v > 0.1:
+                col = f"rgba(34,197,94,{min(0.9, 0.5 + abs(avg_v) * 0.4):.2f})"
+            elif avg_v < -0.1:
+                col = f"rgba(239,68,68,{min(0.9, 0.5 + abs(avg_v) * 0.4):.2f})"
+            else:
+                col = "rgba(156,163,175,0.7)"
+            node_x.append(pos[n][0])
+            node_y.append(pos[n][1])
+            node_colors.append(col)
+            node_sizes.append(int(20 + centrality * 40 + (12 if is_contact else 0)))
+            node_hover.append(
+                f"{n}<br>Valence: {avg_v:+.2f}<br>Centrality: {centrality:.2f}"
+                f"<br>Mentions: {cnt}<br>{'(chat contact)' if is_contact else ''}"
+            )
+
+        return {
+            "data": [
+                {"type": "scatter", "x": edge_x, "y": edge_y, "mode": "lines",
+                 "line": {"width": 1, "color": "rgba(156,163,175,0.4)"}, "hoverinfo": "none"},
+                {"type": "scatter", "x": node_x, "y": node_y, "mode": "markers+text",
+                 "marker": {"size": node_sizes, "color": node_colors,
+                            "line": {"width": 1, "color": "rgba(0,0,0,0.1)"}},
+                 "text": list(G.nodes()), "textposition": "top center",
+                 "textfont": {"size": 11}, "hovertext": node_hover, "hoverinfo": "text"},
+            ],
+            "layout": {
+                "showlegend": False, "hovermode": "closest",
+                "xaxis": {"showgrid": False, "zeroline": False, "showticklabels": False},
+                "yaxis": {"showgrid": False, "zeroline": False, "showticklabels": False},
+                "margin": {"l": 20, "r": 20, "t": 40, "b": 20},
+                "paper_bgcolor": "rgba(0,0,0,0)", "plot_bgcolor": "rgba(0,0,0,0)",
+                "height": 520,
+            },
+        }
+
+
 def generate_html(
     chats: list,
     cross_chat: dict,
@@ -1656,6 +1741,15 @@ def generate_html(
     people_data = cross_chat.get("merged_people", {})
     people_ai = ai_results.get("people_cards", {})
 
+    # Build relationship network topology
+    topology_figure: dict = {}
+    try:
+        gen = InteractiveTopologyGenerator(people_data)
+        G = gen.construct_interaction_graph()
+        topology_figure = gen.generate_plotly_figure(G)
+    except Exception as _topo_err:
+        print(f"[WARN] Topology generation failed: {_topo_err}")
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1663,6 +1757,7 @@ def generate_html(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WhatsApp Analysis — {_escape_html(PRIMARY_USER_NAME)}</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.29.1/plotly.min.js"></script>
 <style>
 :root{{
   --bg:#f8f9fa;--surface:#ffffff;--border:#e2e8f0;--text:#1a202c;--muted:#718096;
@@ -1807,6 +1902,7 @@ const CHATS = {_j(chat_data)};
 const CROSS_CHAT = {_j(cross_chat)};
 const PEOPLE = {_j(people_data)};
 const PEOPLE_AI = {_j(people_ai)};
+const TOPOLOGY_FIGURE = {_j(topology_figure)};
 const TIMELINE_HIGHLIGHTS = {_j(ai_results.get("timeline_highlights", []))};
 const CROSS_CHAT_LINKS = {_j(ai_results.get("cross_chat_links", []))};
 const EMOTION_COLORS = {{
@@ -2002,6 +2098,7 @@ function getTabsForChat(chatId) {{
     {{id:"coping",label:"Coping Dynamics",showAll:true,showSingle:true}},
     {{id:"people",label:"People & Sentiment",showAll:true,showSingle:true}},
     {{id:"topics",label:"Topics Over Time",showAll:true,showSingle:true}},
+    {{id:"network",label:"Relationship Network",showAll:true,showSingle:true}},
     {{id:"narrative",label:"Narrative vs Record",showAll:false,showSingle:true}},
   ];
   const isAll = chatId==="all";
@@ -2086,6 +2183,7 @@ function renderMain() {{
       case "coping": renderCoping(el,[chat]); break;
       case "people": renderPeople(el); break;
       case "topics": renderTopics(el,[chat]); break;
+      case "network": renderNetwork(el); break;
       case "framework": renderFramework(el,chat); break;
       case "narrative": renderNarrative(el,chat); break;
       default: renderTimeline(el,chat);
@@ -2105,6 +2203,7 @@ function renderAllView(el) {{
     case "coping": renderCoping(el,CHATS); break;
     case "people": renderPeople(el); break;
     case "topics": renderTopics(el,CHATS); break;
+    case "network": renderNetwork(el); break;
     default: renderConversationsPanel(el);
   }}
 }}
@@ -2897,6 +2996,44 @@ function renderTopics(el, chats) {{
         }}
       }});
     }});
+  }});
+}}
+
+// ── Relationship Network ──────────────────────────────────────────────────
+function renderNetwork(el) {{
+  const fig=TOPOLOGY_FIGURE;
+  if(!fig||!fig.data||!fig.data.length){{
+    el.innerHTML=`<div class="card"><h2>Relationship Network</h2>
+      <p class="no-data">Network graph requires networkx (pip install networkx) and at least
+      two people detected across chats.</p></div>`;
+    return;
+  }}
+  el.innerHTML=`<div class="card">
+    <h2>Relationship Network</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      Entity–sentiment graph. Node size = degree centrality. Colour = average valence
+      (green → positive, red → negative, grey → neutral).
+      <span style="color:#22c55e;font-weight:600">■</span> positive &nbsp;
+      <span style="color:#ef4444;font-weight:600">■</span> negative &nbsp;
+      <span style="color:#9ca3af;font-weight:600">■</span> neutral &nbsp;
+      <span style="font-size:11px">Larger node = appears in more chats/contexts.</span>
+    </p>
+    <div id="topoPlot" style="width:100%;height:520px"></div>
+  </div>`;
+  if(typeof Plotly==="undefined"){{
+    document.getElementById("topoPlot").innerHTML=`<p class="no-data">Plotly.js failed to load. Check network connection.</p>`;
+    return;
+  }}
+  requestAnimationFrame(function(){{
+    const div=document.getElementById("topoPlot");
+    if(!div) return;
+    try {{
+      Plotly.newPlot(div, fig.data, fig.layout||{{}}, {{
+        responsive:true, displayModeBar:false, staticPlot:false
+      }});
+    }} catch(e) {{
+      div.innerHTML=`<p class="no-data">Network render error: ${{esc(String(e))}}</p>`;
+    }}
   }});
 }}
 
