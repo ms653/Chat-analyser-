@@ -1697,7 +1697,10 @@ class InteractiveTopologyGenerator:
             return None
         G = nx.Graph()
         for name, data in self.people.items():
-            avg_v = data.get("avg_valence", 0.0)
+            dist = data.get("sentiment_dist", {})
+            pos = dist.get("positive", 0) / 100
+            neg = dist.get("negative", 0) / 100
+            avg_v = data.get("avg_valence", pos - neg)
             G.add_node(name, avg_valence=avg_v, count=data.get("count", 1), is_contact=False)
             for chat_name in data.get("chats", []):
                 if not G.has_node(chat_name):
@@ -3013,7 +3016,7 @@ function renderTopics(el, chats) {{
       anyLda=true;
       const canvasId="ldaChart_"+chat.id;
       html+=`<div style="margin-bottom:24px">
-        <canvas id="${{canvasId}}" height="120"></canvas>
+        <div style="position:relative;height:200px"><canvas id="${{canvasId}}"></canvas></div>
         <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px">`;
       const labels=Object.keys(lda.series);
       labels.forEach(function(label,i){{

@@ -577,14 +577,6 @@ details[open] summary::before{transform:rotate(90deg)}
   <div class="card">
     <div class="card-head"><div class="step">3</div><h2>Settings</h2></div>
 
-    <div class="fld" style="margin-bottom:16px">
-      <label>Sentiment engine</label>
-      <div class="radio-group">
-        <label class="radio-opt"><input type="radio" name="nlp" value="textblob" checked> TextBlob <span style="color:var(--muted);font-size:12px">&nbsp;faster</span></label>
-        <label class="radio-opt"><input type="radio" name="nlp" value="transformers"> Transformers <span style="color:var(--muted);font-size:12px">&nbsp;more accurate, downloads ~250 MB on first use</span></label>
-      </div>
-    </div>
-
     <details style="margin-bottom:14px">
       <summary>Ollama (local AI)</summary>
       <div class="detail-body grid2">
@@ -785,7 +777,7 @@ function buildConfig() {
   return {
     primary_user:  document.getElementById('primaryUser').value.trim(),
     chats,
-    nlp_engine:    document.querySelector('[name="nlp"]:checked')?.value||'textblob',
+    nlp_engine:    'transformers',
     ollama_url:    document.getElementById('ollamaUrl').value||'http://localhost:11434',
     ollama_model:  document.getElementById('ollamaModel').value||'gemma3',
     no_ai:         document.getElementById('noAi').checked,
@@ -893,8 +885,6 @@ window.addEventListener('pywebviewready', async () => {
     if (c.ollama_model) document.getElementById('ollamaModel').value = c.ollama_model;
     if (c.no_ai)        document.getElementById('noAi').checked      = true;
     if (c.api_key)      document.getElementById('apiKey').value      = c.api_key;
-    const r = document.querySelector(`[name="nlp"][value="${c.nlp_engine||'textblob'}"]`);
-    if (r) r.checked = true;
     (c.chats||[]).length ? c.chats.forEach(addChat) : addChat();
   } catch(e) { addChat(); }
 });
@@ -923,4 +913,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()
