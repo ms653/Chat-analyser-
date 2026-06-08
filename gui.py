@@ -492,7 +492,7 @@ class AnalyserAPI:
                 build_cmd = [
                     python_exec, "-m", "PyInstaller",
                     str(spec_file),
-                    "--noconfirm",
+                    "--noconfirm", "--clean",
                 ]
             else:
                 # Fallback if spec is missing
@@ -504,7 +504,7 @@ class AnalyserAPI:
                     "--hidden-import", "webview.platforms.cocoa",
                     "--collect-all", "webview",
                     "--add-data", "build_sha.txt:.",
-                    "--noconfirm",
+                    "--noconfirm", "--clean",
                     str(proj / "gui.py"),
                 ]
             r3 = subprocess.run(
