@@ -801,6 +801,90 @@ def compute_topics(chat: dict, custom_topics: list) -> dict:
     return {"counts": dict(topic_counts), "examples": dict(topic_examples)}
 
 
+def run_lda_topics(messages: list, n_topics: int = 5) -> dict:
+    """Probabilistic LDA topic discovery with monthly time-series.
+    Returns {} gracefully if gensim or nltk are not installed or data is sparse.
+    """
+    try:
+        from gensim import corpora, models as gensim_models
+    except ImportError:
+        return {}
+
+    try:
+        import nltk
+        try:
+            stop = set(nltk.corpus.stopwords.words("english"))
+        except LookupError:
+            nltk.download("stopwords", quiet=True)
+            stop = set(nltk.corpus.stopwords.words("english"))
+    except ImportError:
+        stop = set()
+
+    _SKIP_PREFIXES = ("<Media omitted", "This message was deleted", "image omitted", "audio omitted")
+
+    def _tokenize(text: str) -> list:
+        tokens = re.findall(r"\b[a-z]{3,}\b", text.lower())
+        return [t for t in tokens if t not in stop]
+
+    texts, msg_dates = [], []
+    for m in messages:
+        if any(m["text"].startswith(p) for p in _SKIP_PREFIXES):
+            continue
+        tokens = _tokenize(m["text"])
+        if len(tokens) >= 3:
+            texts.append(tokens)
+            msg_dates.append(m["date"])
+
+    if len(texts) < 20:
+        return {}
+
+    dictionary = corpora.Dictionary(texts)
+    dictionary.filter_extremes(no_below=2, no_above=0.9)
+    if len(dictionary) < 10:
+        return {}
+    corpus = [dictionary.doc2bow(t) for t in texts]
+
+    lda = gensim_models.LdaModel(
+        corpus, num_topics=n_topics, id2word=dictionary, passes=5, random_state=42
+    )
+
+    topic_labels = {
+        i: " · ".join(w for w, _ in lda.show_topic(i, topn=4))
+        for i in range(n_topics)
+    }
+    topic_words = {
+        topic_labels[i]: [w for w, _ in lda.show_topic(i, topn=10)]
+        for i in range(n_topics)
+    }
+
+    # Assign dominant topic per message
+    dominant = []
+    for bow in corpus:
+        dist = dict(lda.get_document_topics(bow, minimum_probability=0))
+        dominant.append(max(dist, key=dist.get) if dist else 0)
+
+    # Monthly counts per topic
+    month_counts: dict = defaultdict(lambda: Counter())
+    for date, topic_idx in zip(msg_dates, dominant):
+        if not date:
+            continue
+        if isinstance(date, str):
+            try:
+                date = datetime.date.fromisoformat(date)
+            except ValueError:
+                continue
+        month_key = f"{date.year}-{date.month:02d}"
+        month_counts[month_key][topic_idx] += 1
+
+    months = sorted(month_counts.keys())
+    series = {
+        topic_labels[i]: [month_counts[m].get(i, 0) for m in months]
+        for i in range(n_topics)
+    }
+
+    return {"months": months, "series": series, "topic_words": topic_words}
+
+
 def extract_person_mentions(chat: dict, min_count: int = 4) -> dict:
     """
     Extract names mentioned ≥ min_count times.
@@ -1127,6 +1211,7 @@ def run_per_chat_analysis(chat: dict, engine: str, custom_topics: list) -> None:
         "daily_sentiment": compute_daily_sentiment(chat),
         "weekly_volume": compute_weekly_volume(chat),
         "topics": compute_topics(chat, custom_topics),
+        "lda_topics": run_lda_topics(chat["messages"]),
         "people": extract_person_mentions(chat),
         "emotion_summary": compute_emotion_summary(chat),
         "coping_summary": compute_coping_summary(chat),
@@ -1544,6 +1629,7 @@ def generate_html(
             "daily_sentiment": a["daily_sentiment"],
             "weekly_volume": a["weekly_volume"],
             "topics": a["topics"],
+            "lda_topics": a.get("lda_topics", {}),
             "distress_signals": a["distress_signals"],
             "crisis_flags": a["crisis_flags"],
             "financial_requests": a["financial_requests"],
@@ -1915,6 +2001,7 @@ function getTabsForChat(chatId) {{
     {{id:"support",label:"Support Given",showAll:true,showSingle:true}},
     {{id:"coping",label:"Coping Dynamics",showAll:true,showSingle:true}},
     {{id:"people",label:"People & Sentiment",showAll:true,showSingle:true}},
+    {{id:"topics",label:"Topics Over Time",showAll:true,showSingle:true}},
     {{id:"narrative",label:"Narrative vs Record",showAll:false,showSingle:true}},
   ];
   const isAll = chatId==="all";
@@ -1998,6 +2085,7 @@ function renderMain() {{
       case "support": renderSupport(el,[chat]); break;
       case "coping": renderCoping(el,[chat]); break;
       case "people": renderPeople(el); break;
+      case "topics": renderTopics(el,[chat]); break;
       case "framework": renderFramework(el,chat); break;
       case "narrative": renderNarrative(el,chat); break;
       default: renderTimeline(el,chat);
@@ -2016,6 +2104,7 @@ function renderAllView(el) {{
     case "support": renderSupport(el,CHATS); break;
     case "coping": renderCoping(el,CHATS); break;
     case "people": renderPeople(el); break;
+    case "topics": renderTopics(el,CHATS); break;
     default: renderConversationsPanel(el);
   }}
 }}
@@ -2726,6 +2815,89 @@ function renderPeople(el) {{
   }});
   html+=`</div>`;
   el.innerHTML=html;
+}}
+
+// ── Topics Over Time ──────────────────────────────────────────────────────
+function renderTopics(el, chats) {{
+  const TOPIC_COLORS=["#6366f1","#22c55e","#f97316","#3b82f6","#a855f7","#eab308","#ec4899","#14b8a6"];
+  let html=`<div class="card"><h2>Topics Over Time</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px">
+      LDA probabilistic topic discovery. Each month shows the distribution of dominant topics.
+      Falls back to keyword topics when gensim is not installed.
+    </p>`;
+  let anyLda=false;
+  chats.forEach(function(chat){{
+    const lda=chat.lda_topics||{{}};
+    const kw=chat.topics||{{}};
+    if(chats.length>1) html+=`<h3 style="margin-bottom:8px">${{esc(chat.name)}}</h3>`;
+    if(lda.months&&lda.months.length>1&&lda.series){{
+      anyLda=true;
+      const canvasId="ldaChart_"+chat.id;
+      html+=`<div style="margin-bottom:24px">
+        <canvas id="${{canvasId}}" height="120"></canvas>
+        <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px">`;
+      const labels=Object.keys(lda.series);
+      labels.forEach(function(label,i){{
+        const words=(lda.topic_words||{{}})[label]||[];
+        html+=`<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:12px;flex:1;min-width:160px">
+          <div style="font-weight:600;color:${{TOPIC_COLORS[i%TOPIC_COLORS.length]}};margin-bottom:4px">${{esc(label)}}</div>
+          <div style="color:var(--muted)">${{words.slice(0,8).map(w=>`<span style="background:var(--surface);padding:1px 5px;border-radius:3px;margin:1px;display:inline-block">${{esc(w)}}</span>`).join("")}}</div>
+        </div>`;
+      }});
+      html+=`</div></div>`;
+    }} else if(kw.counts&&Object.keys(kw.counts).length){{
+      // Fallback: keyword topic bar chart
+      html+=`<p style="font-size:12px;color:var(--muted);margin-bottom:8px">Keyword topics (install gensim for LDA):</p>`;
+      const counts=kw.counts;
+      const sorted=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]);
+      const max=counts[sorted[0]]||1;
+      sorted.forEach(function(topic){{
+        const pct=Math.round(counts[topic]/max*100);
+        const pretty=topic.replace(/_/g," ");
+        html+=`<div style="margin-bottom:8px">
+          <div style="font-size:13px;margin-bottom:3px">${{esc(pretty)}} <span style="color:var(--muted);font-size:11px">(${{counts[topic]}} messages)</span></div>
+          <div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden">
+            <div style="height:100%;width:${{pct}}%;background:#6366f1;border-radius:3px"></div>
+          </div>
+        </div>`;
+      }});
+    }} else {{
+      html+=`<p class="no-data">No topic data — not enough messages or gensim not installed.</p>`;
+    }}
+  }});
+  html+=`</div>`;
+  el.innerHTML=html;
+  // Draw LDA charts after DOM update
+  chats.forEach(function(chat){{
+    const lda=chat.lda_topics||{{}};
+    if(!lda.months||lda.months.length<=1||!lda.series) return;
+    const canvasId="ldaChart_"+chat.id;
+    requestAnimationFrame(function(){{
+      destroyChart(canvasId);
+      const ctx=document.getElementById(canvasId); if(!ctx) return;
+      const labels=Object.keys(lda.series);
+      charts[canvasId]=new Chart(ctx,{{
+        type:"line",
+        data:{{
+          labels:lda.months,
+          datasets:labels.map(function(label,i){{
+            return {{
+              label:label,
+              data:lda.series[label],
+              borderColor:TOPIC_COLORS[i%TOPIC_COLORS.length],
+              backgroundColor:TOPIC_COLORS[i%TOPIC_COLORS.length]+"33",
+              fill:true,tension:0.3,pointRadius:2,borderWidth:2
+            }};
+          }})
+        }},
+        options:{{
+          responsive:true,maintainAspectRatio:false,
+          scales:{{x:{{ticks:{{font:{{size:11}}}}}},y:{{stacked:false,ticks:{{font:{{size:11}}}}}}}},
+          plugins:{{legend:{{position:"bottom",labels:{{boxWidth:12,font:{{size:11}}}}}}}}
+        }}
+      }});
+    }});
+  }});
 }}
 
 // ── Framework ─────────────────────────────────────────────────────────────
