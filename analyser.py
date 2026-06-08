@@ -894,6 +894,74 @@ def compute_response_times(chat: dict) -> dict:
     }
 
 
+def compute_initiation_monthly(chat: dict) -> dict:
+    """Monthly initiation counts — user vs contact — for trend chart."""
+    user_by_month: dict = defaultdict(int)
+    contact_by_month: dict = defaultdict(int)
+    for msg in chat["messages"]:
+        intents = msg.get("intents", [])
+        date = msg.get("date")
+        if not date:
+            continue
+        if isinstance(date, str):
+            try:
+                date = datetime.date.fromisoformat(date)
+            except ValueError:
+                continue
+        month = f"{date.year}-{date.month:02d}"
+        if "INITIATED_BY_USER" in intents:
+            user_by_month[month] += 1
+        elif "INITIATED_BY_CONTACT" in intents:
+            contact_by_month[month] += 1
+    months = sorted(set(user_by_month.keys()) | set(contact_by_month.keys()))
+    user_pct = []
+    for m in months:
+        u = user_by_month.get(m, 0)
+        c = contact_by_month.get(m, 0)
+        total = u + c or 1
+        user_pct.append(round(u / total * 100, 1))
+    return {"months": months, "user_pct": user_pct}
+
+
+def compute_response_times_monthly(chat: dict) -> dict:
+    """Monthly median response time (hours) for user and contact."""
+    msgs = [m for m in chat["messages"] if m["dt"]]
+    user_by_month: dict = defaultdict(list)
+    contact_by_month: dict = defaultdict(list)
+    for i in range(1, len(msgs)):
+        prev, curr = msgs[i - 1], msgs[i]
+        if prev["exchange_id"] != curr.get("exchange_id"):
+            continue
+        gap = (curr["dt"] - prev["dt"]).total_seconds() / 3600
+        if gap < 0 or gap > 72:
+            continue
+        date = curr.get("date")
+        if not date:
+            continue
+        if isinstance(date, str):
+            try:
+                date = datetime.date.fromisoformat(date)
+            except ValueError:
+                continue
+        month = f"{date.year}-{date.month:02d}"
+        if curr["is_user"]:
+            user_by_month[month].append(gap)
+        else:
+            contact_by_month[month].append(gap)
+    months = sorted(set(user_by_month.keys()) | set(contact_by_month.keys()))
+
+    def _med(lst):
+        if not lst:
+            return None
+        s = sorted(lst)
+        n = len(s)
+        return round((s[n // 2] + s[(n - 1) // 2]) / 2, 2)
+
+    user_med = [_med(user_by_month.get(m, [])) for m in months]
+    contact_med = [_med(contact_by_month.get(m, [])) for m in months]
+    return {"months": months, "user_median_hours": user_med, "contact_median_hours": contact_med}
+
+
 def compute_daily_sentiment(chat: dict) -> dict:
     """Aggregate sentiment scores per day per sender."""
     by_day_user = defaultdict(list)
@@ -1073,29 +1141,66 @@ def run_lda_topics(messages: list, n_topics: int = 5) -> dict:
     CHAT_STOP = {
         # high-frequency chat verbs
         "think", "know", "going", "want", "need", "like", "get", "got", "getting",
-        "say", "said", "see", "saw", "go", "went", "come", "came", "coming",
-        "make", "made", "take", "took", "give", "gave", "use", "used", "using",
-        "try", "tried", "let", "feel", "felt", "look", "looked", "find", "found",
-        "keep", "kept", "tell", "told", "ask", "asked", "thought", "put", "seem",
+        "say", "said", "see", "saw", "goes", "went", "come", "came", "coming",
+        "make", "made", "take", "took", "give", "gave", "used", "using",
+        "tried", "feel", "felt", "look", "looked", "find", "found",
+        "keep", "kept", "tell", "told", "asked", "thought", "seem", "seems",
         "mean", "means", "meant", "hope", "loves", "love", "miss", "missed",
+        "done", "doing", "does", "been", "have", "will", "would", "could",
+        "should", "might", "shall", "must", "much", "many", "some", "then",
         # filler adjectives/adverbs
-        "good", "great", "nice", "bad", "big", "little", "long", "old", "new",
+        "good", "great", "nice", "fine", "sorry", "okay", "well",
+        "bad", "big", "little", "long", "old", "new", "small",
         "sure", "right", "really", "actually", "literally", "basically", "probably",
-        "just", "still", "even", "also", "bit", "lot", "way", "bit", "things", "thing",
+        "just", "still", "even", "also", "back", "away", "here", "there",
         "today", "tonight", "tomorrow", "yesterday", "soon", "already", "always",
-        "never", "maybe", "lol", "haha", "hahaha", "omg", "lmao", "xxx", "xox",
+        "never", "maybe", "quite", "very", "more", "most", "only", "last",
+        "next", "same", "different", "other", "such", "every", "each",
+        # internet / chat noise
+        "lol", "haha", "hahaha", "hehe", "omg", "lmao", "rofl", "xxx", "xox",
+        "yeah", "yep", "yup", "nope", "nah", "ohh", "ahh", "hmm", "eww",
         # chat-specific noise
-        "omitted", "media", "image", "video", "audio", "sticker", "gif",
-        "message", "deleted", "null", "edited",
-        # ultra-common pronouns/determiners not caught by NLTK
-        "yeah", "yes", "okay", "well", "back", "home", "away", "here", "there",
+        "omitted", "media", "image", "video", "audio", "sticker", "edited",
+        "message", "deleted", "null", "http", "https", "www",
+        # contractions without apostrophes (common in WhatsApp)
+        "dont", "cant", "wont", "didnt", "doesnt", "wasnt", "hadnt", "hasnt",
+        "wouldnt", "couldnt", "shouldnt", "isnt", "arent", "havent",
+        "thats", "whats", "whos", "shes", "hes", "ive", "youre",
+        "theyre", "were", "were", "theyd", "shed", "hed", "youd",
+        # quantity / measure words
+        "thing", "things", "time", "times", "bit", "lot", "way", "ways",
         "something", "anything", "nothing", "everything", "someone", "anyone",
     }
     stop = stop | CHAT_STOP
 
+    # Build a proper-noun exclusion set: words that appear capitalised mid-sentence
+    # (not just at sentence start) are likely names, places, brands — not topics.
+    proper_nouns: set = set()
+    word_mid_cap: Counter = Counter()
+    word_mid_total: Counter = Counter()
+    sentence_end_re = re.compile(r"[.?!]\s*$")
+    for _m in messages:
+        words_raw = _m["text"].split()
+        for idx, raw_w in enumerate(words_raw):
+            clean_w = re.sub(r"[^a-zA-Z]", "", raw_w)
+            if len(clean_w) < 5:
+                continue
+            prev = words_raw[idx - 1] if idx > 0 else ""
+            at_sentence_start = (idx == 0 or bool(sentence_end_re.search(prev)))
+            if not at_sentence_start:
+                wl = clean_w.lower()
+                word_mid_total[wl] += 1
+                if clean_w[0].isupper():
+                    word_mid_cap[wl] += 1
+    for wl, cap_count in word_mid_cap.items():
+        total = word_mid_total.get(wl, 0)
+        if total >= 3 and cap_count / total > 0.7:
+            proper_nouns.add(wl)
+
     def _tokenize(text: str) -> list:
-        tokens = re.findall(r"\b[a-z]{4,}\b", text.lower())  # min length 4
-        return [t for t in tokens if t not in stop]
+        tokens = re.findall(r"\b[a-z]{5,}\b", text.lower())  # min length 5
+        return [t for t in tokens if t not in stop and t not in proper_nouns
+                and not t.startswith("http") and not re.search(r"(.)\1{2,}", t)]
 
     texts, msg_dates = [], []
     for m in messages:
@@ -1111,7 +1216,7 @@ def run_lda_topics(messages: list, n_topics: int = 5) -> dict:
 
     dictionary = corpora.Dictionary(texts)
     # Drop words in >60% of messages (too generic) or fewer than 3 messages (too rare)
-    dictionary.filter_extremes(no_below=3, no_above=0.6)
+    dictionary.filter_extremes(no_below=4, no_above=0.45)
     if len(dictionary) < 10:
         return {}
     corpus = [dictionary.doc2bow(t) for t in texts]
@@ -1176,13 +1281,22 @@ def extract_person_mentions(chat: dict, min_count: int = 4) -> dict:
         "don", "doesn", "didn", "isn", "wasn", "aren", "haven", "hadn", "wouldn",
         "couldn", "shouldn", "let", "going", "think", "know", "really", "well",
         "good", "great", "fine", "nice", "yeah", "yep", "nope", "right", "sure",
+        # internet slang / abbreviations / exclamations
+        "omg", "lol", "lmao", "lmfao", "wtf", "tbh", "imo", "imho", "fyi",
+        "yup", "nah", "nope", "haha", "hahaha", "hehe", "lmao", "rofl",
+        "wow", "woo", "woah", "whoa", "yay", "yikes", "ugh", "eww", "eek",
+        "aww", "awww", "ooh", "ohh", "ahh", "ahaha",
         # common emotional/social words that get capitalised mid-message
         "love", "dear", "thanks", "thank", "sorry", "hope", "happy", "sad",
         "god", "lord", "jesus", "christ", "bless",
+        # UK shops / brands / places that are never people
+        "iceland", "tesco", "asda", "waitrose", "sainsburys", "sainsbury",
+        "lidl", "aldi", "morrisons", "primark", "amazon", "google", "facebook",
+        "whatsapp", "rightmove", "zoopla", "ebay", "paypal",
         # seasonal / cultural nouns
         "xmas", "christmas", "easter", "halloween", "thanksgiving",
         # app/tech nouns
-        "app", "phone", "message", "text", "chat", "call", "email", "whatsapp",
+        "app", "phone", "message", "text", "chat", "call", "email",
         # place-ish common nouns
         "home", "house", "road", "street", "town", "hospital", "doctor",
         # days / months
@@ -1190,6 +1304,17 @@ def extract_person_mentions(chat: dict, min_count: int = 4) -> dict:
         "january", "february", "march", "april", "may", "june", "july",
         "august", "september", "october", "november", "december",
     }
+
+    def _looks_like_exclamation(word: str) -> bool:
+        """Catch elongated exclamations like Ahhhh, Oooooh, Hmmm, Nooo, Yesss."""
+        wl = word.lower()
+        # Word dominated by one repeating character (e.g. "Ahh", "Hmm", "Nooo")
+        if len(wl) >= 3 and len(set(wl)) <= 2:
+            return True
+        # Trailing repeated characters (e.g. "Ahhhh", "Yesss")
+        if re.search(r"(.)\1{2,}$", wl):
+            return True
+        return False
 
     # Words that appear in lowercase anywhere in the corpus are ordinary words
     # that happen to be capitalised at sentence starts — not proper nouns.
@@ -1205,7 +1330,7 @@ def extract_person_mentions(chat: dict, min_count: int = 4) -> dict:
         words = re.findall(r"\b[A-Z][a-z]{2,}\b", msg["text"])
         for w in words:
             wl = w.lower()
-            if wl not in known and wl not in STOP and wl not in lowercase_corpus:
+            if wl not in known and wl not in STOP and wl not in lowercase_corpus and not _looks_like_exclamation(w):
                 name_counter[w] += 1
                 if len(name_messages[w]) < 8:
                     name_messages[w].append({
@@ -1479,7 +1604,9 @@ def run_per_chat_analysis(chat: dict, engine: str, custom_topics: list, log_fn=N
     chat["analytics"] = {
         "visit_tracker": compute_visit_tracker(chat),
         "initiation_balance": compute_initiation_balance(chat),
+        "initiation_monthly": compute_initiation_monthly(chat),
         "response_times": compute_response_times(chat),
+        "response_times_monthly": compute_response_times_monthly(chat),
         "daily_sentiment": compute_daily_sentiment(chat),
         "weekly_volume": compute_weekly_volume(chat),
         "topics": compute_topics(chat, custom_topics),
@@ -2061,19 +2188,23 @@ class InteractiveTopologyGenerator:
     def __init__(self, people: dict):
         self.people = people
 
-    def construct_interaction_graph(self):
+    def construct_interaction_graph(self, chat_filter=None):
         try:
             import networkx as nx
         except ImportError:
             return None
         G = nx.Graph()
         for name, data in self.people.items():
+            chats = data.get("chats", [])
+            if chat_filter and chat_filter not in chats:
+                continue
+            chats_to_link = [chat_filter] if chat_filter else chats
             dist = data.get("sentiment_dist", {})
             pos = dist.get("positive", 0) / 100
             neg = dist.get("negative", 0) / 100
             avg_v = data.get("avg_valence", pos - neg)
             G.add_node(name, avg_valence=avg_v, count=data.get("count", 1), is_contact=False)
-            for chat_name in data.get("chats", []):
+            for chat_name in chats_to_link:
                 if not G.has_node(chat_name):
                     G.add_node(chat_name, avg_valence=0.0, count=0, is_contact=True)
                 if G.has_edge(chat_name, name):
@@ -2164,7 +2295,9 @@ def generate_html(
             "framework_content": chat.get("framework_content") or "",
             "visit_tracker": a["visit_tracker"],
             "initiation_balance": a["initiation_balance"],
+            "initiation_monthly": a["initiation_monthly"],
             "response_times": a["response_times"],
+            "response_times_monthly": a["response_times_monthly"],
             "daily_sentiment": a["daily_sentiment"],
             "weekly_volume": a["weekly_volume"],
             "topics": a["topics"],
@@ -2197,12 +2330,20 @@ def generate_html(
     people_data = cross_chat.get("merged_people", {})
     people_ai = ai_results.get("people_cards", {})
 
-    # Build relationship network topology
-    topology_figure: dict = {}
+    # Build relationship network topology — one figure per chat + one for "all"
+    topology_figures: dict = {}
     try:
         gen = InteractiveTopologyGenerator(people_data)
-        G = gen.construct_interaction_graph()
-        topology_figure = gen.generate_plotly_figure(G)
+        G_all = gen.construct_interaction_graph()
+        topology_figures["all"] = gen.generate_plotly_figure(G_all)
+        for _cd in chat_data:
+            _cid = _cd["id"]
+            _cname = _cd["name"]
+            try:
+                _G = gen.construct_interaction_graph(chat_filter=_cname)
+                topology_figures[_cid] = gen.generate_plotly_figure(_G)
+            except Exception as _ce:
+                topology_figures[_cid] = {}
     except Exception as _topo_err:
         print(f"[WARN] Topology generation failed: {_topo_err}")
 
@@ -2223,11 +2364,11 @@ def generate_html(
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:15px;line-height:1.6}}
 a{{color:var(--contact)}}
-.header{{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}}
+.header{{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:44px;z-index:100;box-shadow:var(--shadow)}}
 .header h1{{font-size:18px;font-weight:700}}
 .header .meta{{color:var(--muted);font-size:13px}}
 .page-layout{{display:flex;align-items:flex-start}}
-.sidebar{{width:220px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);position:sticky;top:60px;height:calc(100vh - 60px);overflow-y:auto;padding:8px 0}}
+.sidebar{{width:220px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);position:sticky;top:104px;height:calc(100vh - 104px);overflow-y:auto;padding:8px 0}}
 .sidebar-title{{padding:8px 16px 6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}}
 .sb-btn{{display:block;width:100%;padding:10px 16px;border:none;background:transparent;text-align:left;cursor:pointer;border-left:3px solid transparent;transition:background .15s,border-color .15s}}
 .sb-btn:hover{{background:var(--bg);border-left-color:var(--border)}}
@@ -2240,7 +2381,7 @@ a{{color:var(--contact)}}
 .sb-tag{{display:inline-block;font-size:10px;padding:1px 6px;border-radius:8px;background:var(--bg);border:1px solid var(--border);margin:3px 2px 0 0}}
 .sb-flag{{display:inline-block;font-size:11px;color:var(--warn);margin-top:3px}}
 .main-area{{flex:1;min-width:0;display:flex;flex-direction:column}}
-.tabs{{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;display:flex;gap:0;overflow-x:auto;position:sticky;top:60px;z-index:99;box-shadow:var(--shadow)}}
+.tabs{{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;display:flex;gap:0;overflow-x:auto;position:sticky;top:104px;z-index:99;box-shadow:var(--shadow)}}
 .tab-btn{{padding:12px 18px;border:none;background:transparent;cursor:pointer;font-size:14px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s}}
 .tab-btn.active{{color:var(--contact);border-bottom-color:var(--contact)}}
 .main{{padding:24px}}
@@ -2361,7 +2502,7 @@ const CHATS = {_j(chat_data)};
 const CROSS_CHAT = {_j(cross_chat)};
 const PEOPLE = {_j(people_data)};
 const PEOPLE_AI = {_j(people_ai)};
-const TOPOLOGY_FIGURE = {_j(topology_figure)};
+const TOPOLOGY_FIGURES = {_j(topology_figures)};
 const TIMELINE_HIGHLIGHTS = {_j(ai_results.get("timeline_highlights", []))};
 const CROSS_CHAT_LINKS = {_j(ai_results.get("cross_chat_links", []))};
 const EMOTION_COLORS = {{
@@ -2380,6 +2521,35 @@ let charts = {{}};
 // ── Utilities ────────────────────────────────────────────────────────────────
 function esc(s) {{
   return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}}
+function mdToHtml(text) {{
+  if(!text) return "";
+  let s = esc(text);
+  // Headers
+  s = s.replace(/^### (.+)$/gm,"<h4 style=\"font-size:14px;font-weight:700;margin:12px 0 4px\">$1</h4>");
+  s = s.replace(/^## (.+)$/gm,"<h3 style=\"font-size:15px;font-weight:700;margin:14px 0 6px\">$1</h3>");
+  s = s.replace(/^# (.+)$/gm,"<h3 style=\"font-size:16px;font-weight:700;margin:16px 0 6px\">$1</h3>");
+  // Bold and italic
+  s = s.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>");
+  s = s.replace(/\*(.+?)\*/g,"<em>$1</em>");
+  // Bullet lists
+  s = s.replace(/((?:^[*\-] .+$\n?)+)/gm,function(block){{
+    const items=block.trim().split("\\n").map(function(l){{return `<li style="margin-bottom:3px">${{l.replace(/^[*\-] /,"")}}</li>`;}}).join("");
+    return `<ul style="margin:8px 0 8px 18px;padding:0">${{items}}</ul>`;
+  }});
+  // Numbered lists
+  s = s.replace(/((?:^\d+\. .+$\n?)+)/gm,function(block){{
+    const items=block.trim().split("\\n").map(function(l){{return `<li style="margin-bottom:3px">${{l.replace(/^\d+\. /,"")}}</li>`;}}).join("");
+    return `<ol style="margin:8px 0 8px 18px;padding:0">${{items}}</ol>`;
+  }});
+  // Paragraphs
+  return s.split(/\n\n+/).map(function(p){{
+    p=p.trim();
+    if(!p) return "";
+    if(/^<[huo]/.test(p)) return p;
+    p=p.replace(/\n/g,"<br>");
+    return `<p style="font-size:14px;line-height:1.75;margin-bottom:14px;color:var(--text)">${{p}}</p>`;
+  }}).join("");
 }}
 function fmt(dateStr) {{
   if(!dateStr||dateStr==="None"||dateStr==="null") return "";
@@ -2719,8 +2889,8 @@ function renderConversationsPanel(el) {{
     CROSS_CHAT_LINKS.forEach(l=>{{
       html+=`<div class="cross-chat-card">
         <div style="font-weight:600;margin-bottom:4px">${{esc(l.date_range)}} — ${{esc(l.chats_involved)}}</div>
-        <div>${{esc(l.pattern)}}</div>
-        <div style="color:var(--muted);font-size:12px;margin-top:4px">${{esc(l.significance)}}</div>
+        <div>${{mdToHtml(l.pattern)}}</div>
+        <div style="color:var(--muted);font-size:12px;margin-top:4px">${{mdToHtml(l.significance)}}</div>
       </div>`;
     }});
     html+=`</div>`;
@@ -2743,7 +2913,7 @@ function renderConversationsPanel(el) {{
     TIMELINE_HIGHLIGHTS.forEach(h=>{{
       html+=`<div class="timeline-event ${{esc(h.type)}}">
         <div class="event-date">${{fmt(h.date)}} — ${{esc(h.chat)}}</div>
-        <div>${{esc(h.significance)}}</div>
+        <div>${{mdToHtml(h.significance)}}</div>
       </div>`;
     }});
     html+=`</div>`;
@@ -3259,18 +3429,100 @@ function renderEmotionOverTime(el, chats) {{
 
 // ── Initiation balance ─────────────────────────────────────────────────────
 function renderInitiation(el, chats) {{
-  let html=`<div class="card"><h2>Initiation Balance</h2>`;
+  let html=`<div class="card"><h2>Initiation Balance</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px">How often each person starts a new conversation thread.</p>`;
   chats.forEach(chat=>{{
     const init=chat.initiation_balance;
     html+=`<div style="margin-bottom:20px">
-      ${{chats.length>1?`<h3>${{esc(chat.name)}}</h3>`:""}}
+      ${{chats.length>1?`<h3 style="margin-bottom:8px">${{esc(chat.name)}}</h3>`:""}}
       <div class="bar-label"><span>You: ${{init.user_pct}}% (${{init.user_count}})</span><span>${{esc(chat.name)}}: ${{init.contact_pct}}% (${{init.contact_count}})</span></div>
       <div class="bar"><div class="bar-user" style="width:${{init.user_pct}}%"></div><div class="bar-contact" style="width:${{init.contact_pct}}%"></div></div>
       <div style="font-size:12px;color:var(--muted)">Trend: ${{init.trend}}</div>
     </div>`;
   }});
   html+=`</div>`;
+
+  // Monthly initiation % over time chart
+  chats.forEach(function(chat) {{
+    const im = chat.initiation_monthly;
+    if(!im||!im.months||im.months.length<2) return;
+    const canvasId="initMonthly_"+chat.id;
+    html+=`<div class="card">
+      <h3 style="margin-bottom:12px">${{chats.length>1?esc(chat.name)+" — ":""}}Initiation % Over Time</h3>
+      <canvas id="${{canvasId}}" height="90"></canvas>
+    </div>`;
+  }});
+
+  // Monthly response times chart
+  chats.forEach(function(chat) {{
+    const rm = chat.response_times_monthly;
+    const rt = chat.response_times;
+    if(!rm||!rm.months||rm.months.length<2) return;
+    const canvasId="rtMonthly_"+chat.id;
+    const uAvg = rt.user_avg_hours!=null?rt.user_avg_hours+"h avg":"n/a";
+    const cAvg = rt.contact_avg_hours!=null?rt.contact_avg_hours+"h avg":"n/a";
+    html+=`<div class="card">
+      <h3 style="margin-bottom:4px">${{chats.length>1?esc(chat.name)+" — ":""}}Response Times Over Time (median hours)</h3>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:12px">
+        You overall: ${{uAvg}} &nbsp;·&nbsp; ${{esc(chat.name)}} overall: ${{cAvg}}
+      </p>
+      <canvas id="${{canvasId}}" height="90"></canvas>
+    </div>`;
+  }});
+
   el.innerHTML=html;
+
+  // Draw initiation charts
+  chats.forEach(function(chat) {{
+    const im = chat.initiation_monthly;
+    if(!im||!im.months||im.months.length<2) return;
+    const ctx=document.getElementById("initMonthly_"+chat.id);
+    if(!ctx) return;
+    new Chart(ctx,{{
+      type:"line",
+      data:{{
+        labels:im.months,
+        datasets:[
+          {{label:"Your initiation %",data:im.user_pct,borderColor:"#1a73e8",backgroundColor:"rgba(26,115,232,0.1)",tension:0.4,fill:true,pointRadius:2,borderWidth:2}},
+          {{label:"50% baseline",data:im.months.map(()=>50),borderColor:"#9ca3af",borderDash:[4,4],borderWidth:1,pointRadius:0,fill:false}}
+        ]
+      }},
+      options:{{
+        responsive:true,
+        plugins:{{legend:{{display:true,position:"top"}},tooltip:{{callbacks:{{label:function(c){{return c.dataset.label+": "+c.parsed.y+"%";}}}}}}}},
+        scales:{{
+          x:{{ticks:{{maxRotation:45,font:{{size:11}}}}}},
+          y:{{min:0,max:100,ticks:{{callback:function(v){{return v+"%";}},stepSize:25}}}}
+        }}
+      }}
+    }});
+  }});
+
+  // Draw response times charts
+  chats.forEach(function(chat) {{
+    const rm = chat.response_times_monthly;
+    if(!rm||!rm.months||rm.months.length<2) return;
+    const ctx=document.getElementById("rtMonthly_"+chat.id);
+    if(!ctx) return;
+    new Chart(ctx,{{
+      type:"line",
+      data:{{
+        labels:rm.months,
+        datasets:[
+          {{label:"You (median hrs)",data:rm.user_median_hours,borderColor:"#1a73e8",backgroundColor:"rgba(26,115,232,0.1)",tension:0.4,fill:false,pointRadius:2,borderWidth:2,spanGaps:true}},
+          {{label:esc(chat.name)+" (median hrs)",data:rm.contact_median_hours,borderColor:"#e91e63",backgroundColor:"rgba(233,30,99,0.1)",tension:0.4,fill:false,pointRadius:2,borderWidth:2,spanGaps:true}}
+        ]
+      }},
+      options:{{
+        responsive:true,
+        plugins:{{legend:{{display:true,position:"top"}},tooltip:{{callbacks:{{label:function(c){{return c.dataset.label+": "+(c.parsed.y!=null?c.parsed.y+"h":"—");}}}}}}}},
+        scales:{{
+          x:{{ticks:{{maxRotation:45,font:{{size:11}}}}}},
+          y:{{min:0,ticks:{{callback:function(v){{return v+"h";}}}}}}
+        }}
+      }}
+    }});
+  }});
 }}
 
 // ── Crisis ─────────────────────────────────────────────────────────────────
@@ -3487,8 +3739,8 @@ function renderPeople(el) {{
       <div class="name">${{esc(name)}} <span style="font-size:12px;color:var(--muted);font-weight:400">×${{p.count}} mentions · ${{p.chats.join(", ")}}</span></div>
       ${{label?`<div class="label">${{esc(label)}}</div>`:""}}
       ${{valenceHtml}}
-      ${{warn?`<div style="background:#fef3c7;border-radius:4px;padding:8px;font-size:12px;margin-bottom:8px">⚠ ${{esc(warn)}}</div>`:""}}
-      ${{summary?`<div class="summary">${{esc(summary)}}</div>`:""}}
+      ${{warn?`<div style="background:#fef3c7;border-radius:4px;padding:8px;font-size:12px;margin-bottom:8px">⚠ ${{mdToHtml(warn)}}</div>`:""}}
+      ${{summary?`<div class="summary">${{mdToHtml(summary)}}</div>`:""}}
       <textarea class="note" placeholder="Add your own notes about ${{name}}…" onchange="savePersonEdit('${{name}}',this.value)">${{esc(saved)}}</textarea>
       ${{absa_excerpts.length?`<details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">Show ABSA reasoning excerpts (${{absa_excerpts.length}})</summary><div style="margin-top:8px">
         ${{absa_excerpts.map(e=>{{
@@ -3623,7 +3875,8 @@ function renderTopics(el, chats) {{
 
 // ── Relationship Network ──────────────────────────────────────────────────
 function renderNetwork(el) {{
-  const fig=TOPOLOGY_FIGURE;
+  const figKey=currentChat||"all";
+  const fig=TOPOLOGY_FIGURES[figKey]||TOPOLOGY_FIGURES["all"]||{{}};
   if(!fig||!fig.data||!fig.data.length){{
     el.innerHTML=`<div class="card"><h2>Relationship Network</h2>
       <p class="no-data">Network graph requires networkx (pip install networkx) and at least
@@ -3664,15 +3917,15 @@ function renderFramework(el, chat) {{
   const suggestions=chat.framework_suggestions||[];
   let html=`<div class="card"><h2>Communications Framework — ${{esc(chat.name)}}</h2>`;
   if(chat.framework_content) {{
-    html+=`<pre style="white-space:pre-wrap;font-size:13px;line-height:1.7;margin-bottom:16px;padding:16px;background:var(--bg);border-radius:var(--radius)">${{esc(chat.framework_content)}}</pre>`;
+    html+=`<div style="font-size:13px;line-height:1.7;margin-bottom:16px;padding:16px;background:var(--bg);border-radius:var(--radius)">${{mdToHtml(chat.framework_content)}}</div>`;
   }}
   if(suggestions.length) {{
     html+=`<h3 style="margin-bottom:10px">AI-suggested adjustments</h3>`;
     suggestions.forEach(s=>{{
       html+=`<div class="fw-item">
-        <div class="fw-original">${{esc(s.framework_item)}}</div>
-        <div class="fw-suggestion">Suggested: ${{esc(s.suggested_adjustment)}}</div>
-        <div class="fw-basis">Based on: ${{esc(s.data_basis)}}</div>
+        <div class="fw-original">${{mdToHtml(s.framework_item)}}</div>
+        <div class="fw-suggestion">Suggested: ${{mdToHtml(s.suggested_adjustment)}}</div>
+        <div class="fw-basis">Based on: ${{mdToHtml(s.data_basis)}}</div>
       </div>`;
     }});
   }}
@@ -3691,8 +3944,8 @@ function renderNarrative(el, chat) {{
   }} else {{
     pairs.forEach(p=>{{
       html+=`<div class="contrast-pair">
-        <div class="claimed">${{esc(p.claimed)}}</div>
-        <div class="record">${{esc(p.record_shows)}}</div>
+        <div class="claimed">${{mdToHtml(p.claimed)}}</div>
+        <div class="record">${{mdToHtml(p.record_shows)}}</div>
       </div>`;
     }});
   }}
@@ -3716,11 +3969,7 @@ function renderSummary(el, chat) {{
   if(!text) {{
     html += `<p class="no-data">No summary generated. Run with AI enabled to generate a relationship summary.</p>`;
   }} else {{
-    // Render each paragraph
-    const paras = text.split("\\n").map(p => p.trim()).filter(Boolean);
-    paras.forEach(function(p) {{
-      html += `<p style="font-size:14px;line-height:1.75;margin-bottom:14px;color:var(--text)">${{esc(p)}}</p>`;
-    }});
+    html += mdToHtml(text);
   }}
   html += `</div>`;
   el.innerHTML = html;
@@ -3776,9 +4025,8 @@ function askQuestion() {{
   }}
 
   pywebview.api.chat_qa(chatId, question).then(function(answer) {{
-    const paras = (answer||"No response").split("\\n").map(p=>p.trim()).filter(Boolean);
     aEl.firstChild.style.color = "var(--text)";
-    aEl.firstChild.innerHTML = paras.map(p=>`<p style="margin:0 0 6px">${{esc(p)}}</p>`).join("");
+    aEl.firstChild.innerHTML = mdToHtml(answer||"No response");
     history.scrollTop = history.scrollHeight;
   }}).catch(function(err) {{
     aEl.firstChild.style.color = "var(--danger)";
@@ -3817,9 +4065,8 @@ function showMoodExplainer(canvasId, dateStr) {{
   pywebview.api.explain_period(currentChat, dateStr).then(function(answer) {{
     const body = document.getElementById("mood-explainer-body");
     if(!body) return;
-    const paras = (answer||"No response").split("\\n").map(p=>p.trim()).filter(Boolean);
     body.style.color = "var(--text)";
-    body.innerHTML = paras.map(p=>`<p style="margin:0 0 8px">${{esc(p)}}</p>`).join("");
+    body.innerHTML = mdToHtml(answer||"No response");
   }}).catch(function(err) {{
     const body = document.getElementById("mood-explainer-body");
     if(body) {{ body.style.color="var(--danger)"; body.textContent="Error: "+String(err); }}
