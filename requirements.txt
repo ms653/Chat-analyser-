@@ -19,6 +19,10 @@ textblob>=0.18.0
 # Emoji sentiment scoring (used with Option A)
 emoji>=2.2.0
 
+# Crisis detection — Tier 2 Random Forest classifier
+scikit-learn>=1.3.0
+nltk>=3.8
+
 # Optional — Claude API for crisis assessment
 # Only needed if CRISIS_AI_ASSESSMENT = True
 anthropic>=0.28.0

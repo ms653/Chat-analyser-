@@ -406,20 +406,46 @@ DISTRESS_KW = [
     r"\bsince (dad|he|she|they) (died|left|passed|went)\b",
 ]
 
-CRISIS_KW = [
-    r"\b(don['']t want to (be here|live|exist|carry on)|better off (without me|dead)|ending it|not worth living|want to die|kill myself|suicide)\b",
-    r"\b(took.{0,20}(pills|tablets)|hurt myself|self.harm)\b",
-    # self-harm
-    r"\b(cut(ting)? myself|been cutting|i['']ve cut|started cutting|cut(s)? (again|(my )?(arm|wrist|leg|skin)))\b",
-    r"\b(harm(ing)? myself|hurting myself|been hurting myself|hurt(ing)? my (arm|wrist|leg|skin))\b",
-    # suicidal ideation variants
-    r"\b(don['']t want to be here( any ?more)?|i just want to (disappear|not exist|be gone))\b",
-    r"\b(everyone.{0,40}better off without me|world.{0,30}better without me)\b",
-    r"\b(end(ing)? it all|end(ing)? (my life|everything|things))\b",
-    r"\b(no (reason|point|purpose) (to|in) (live|living|go(ing)? on|be(ing)? here))\b",
-    r"\b(think(ing)? (about|of) (suicide|killing myself|ending (it|my life)|not being here))\b",
-    r"\b(plan(ning)? to (hurt|harm|kill) myself)\b",
-]
+# Structured crisis taxonomy — 3 active dimensions with risk levels
+# Level 1 = Moderate, Level 2 = Elevated, Level 3 = Critical
+CRISIS_TAXONOMY = {
+    "cognitive": {
+        "level": 2,
+        "patterns": [
+            r"\b(hopeless|worthless|not worth living|like a burden)\b",
+            r"\b(better off (without me|dead))\b",
+            r"\b(no (point|reason|purpose) (in living|to live|to go on|to be here))\b",
+            r"\b(everyone.{0,40}better off without me|world.{0,30}better without me)\b",
+            r"\b(don['']t want to be here( any ?more)?|just want to (disappear|not exist|be gone))\b",
+        ],
+    },
+    "behavioral": {
+        "level": 3,
+        "patterns": [
+            r"\b(want to die|kill myself|suicide|suicidal|ending it)\b",
+            r"\b(took.{0,20}(pills|tablets)|self.harm)\b",
+            r"\b(cut(ting)? myself|been cutting|i['']ve cut|started cutting|cut(s)? (again|(my )?(arm|wrist|leg|skin)))\b",
+            r"\b(harm(ing)? myself|hurting myself|been hurting myself|hurt(ing)? my (arm|wrist|leg|skin))\b",
+            r"\b(end(ing)? (it all|my life|everything))\b",
+            r"\b(think(ing)? (about|of) (suicide|killing myself|ending (it|my life)|not being here))\b",
+            r"\b(plan(ning)? to (hurt|harm|kill) myself)\b",
+            r"\b(don['']t want to (be here|live|exist|carry on))\b",
+        ],
+    },
+    "emotional": {
+        "level": 2,
+        "patterns": [
+            r"\b(uncontrollable (crying|rage|anger)|can['']t stop (crying|shaking))\b",
+            r"\b(completely (numb|empty|hollow)|feel(ing)? (nothing|completely empty|dead inside))\b",
+            r"\b(overwhelming (despair|emptiness|pain))\b",
+        ],
+    },
+}
+
+CRISIS_LEVEL_LABELS = {1: "Moderate Risk", 2: "Elevated Risk", 3: "Critical Risk"}
+
+# Kept for distress signals (sub-crisis; does not trigger CRISIS_FLAG)
+CRISIS_KW: list = []  # no longer used directly — patterns live in CRISIS_TAXONOMY
 
 FINANCIAL_KW = [
     r"\b(borrow|lend|loan|send|transfer|advance|owe|pay you back|need.{0,15}money|short.{0,10}this month)\b",
@@ -492,7 +518,7 @@ def classify_coping(text: str) -> dict:
 
 
 def classify_intent(msg: dict) -> list:
-    """Return a list of intent tags for a message."""
+    """Return a list of intent tags for a message; sets crisis metadata on the message dict."""
     intents = []
     t = msg["text"]
     if _any_pattern(t, VISIT_OFFER_KW):
@@ -505,8 +531,13 @@ def classify_intent(msg: dict) -> list:
         intents.append("VISIT_HAPPENED")
     if _any_pattern(t, DISTRESS_KW):
         intents.append("DISTRESS_SIGNAL")
-    if _any_pattern(t, CRISIS_KW):
-        intents.append("CRISIS_FLAG")
+    # Tier 1: structured taxonomy — highest-level match wins
+    for dimension, dim_data in CRISIS_TAXONOMY.items():
+        if _any_pattern(t, dim_data["patterns"]):
+            intents.append("CRISIS_FLAG")
+            msg["crisis_dimension"] = dimension
+            msg["crisis_level"] = dim_data["level"]
+            break
     if _any_pattern(t, FINANCIAL_KW):
         intents.append("FINANCIAL_REQUEST")
     return intents
@@ -847,6 +878,130 @@ def extract_person_mentions(chat: dict, min_count: int = 4) -> dict:
     return people
 
 
+# ── Tier 2: Random Forest crisis classifier ──────────────────────────────────
+
+_CRISIS_SEED: list = [
+    # (text, label)  1=crisis  0=not-crisis
+    ("I've been cutting myself again", 1),
+    ("I want to die I really can't do this anymore", 1),
+    ("everyone would be better off without me", 1),
+    ("I took too many pills last night", 1),
+    ("I don't want to be here anymore", 1),
+    ("I've been hurting myself when things get bad", 1),
+    ("I'm thinking about ending it all", 1),
+    ("I have a plan to hurt myself tonight", 1),
+    ("I just want to not exist anymore", 1),
+    ("I've started cutting my arms again", 1),
+    ("I don't see any point in living", 1),
+    ("I've been self harming for weeks", 1),
+    ("I made a decision to end things on Friday", 1),
+    ("I'm not going to be around much longer", 1),
+    ("I bought pills to take them all at once", 1),
+    ("This homework is literally killing me lol", 0),
+    ("I want to kill my boss sometimes I swear", 0),
+    ("dying of laughter at this video", 0),
+    ("kill me now this meeting is so boring", 0),
+    ("I'm exhausted and feeling really low today", 0),
+    ("feeling lonely and struggling a bit", 0),
+    ("can't cope with all this stress at work", 0),
+    ("I feel so empty and lost lately", 0),
+    ("nobody seems to care about me right now", 0),
+    ("that film was so sad it made me cry", 0),
+    ("having such a terrible day", 0),
+    ("this weather is so depressing", 0),
+    ("ugh I feel completely dead inside today", 0),
+    ("work is making me want to scream", 0),
+    ("I'm exhausted and completely overwhelmed", 0),
+    ("feeling a bit hopeless about the situation", 0),
+    ("I've been really struggling lately with everything", 0),
+    ("I just wish things were different", 0),
+    ("just had a massive panic attack", 0),
+    ("she hasn't called in weeks I'm so worried", 0),
+    ("so angry I could scream", 0),
+    ("this is absolutely killing my productivity", 0),
+    ("I need to die laughing at this meme", 0),
+    ("I feel like I'm drowning in work", 0),
+]
+
+_crisis_clf = None
+
+
+def _clean_text_for_rf(text: str) -> str:
+    """Preprocess text for TF-IDF: lowercase, strip noise, normalise repetition."""
+    t = text.lower()
+    t = re.sub(r"https?://\S+", " ", t)
+    t = re.sub(r"\d+", " ", t)
+    t = re.sub(r"([a-z])\1{2,}", r"\1", t)
+    t = re.sub(r"[^a-z\s''-]", " ", t)
+    return t.strip()
+
+
+def _load_crisis_classifier():
+    """Load or train the Tier 2 Random Forest crisis classifier."""
+    global _crisis_clf
+    if _crisis_clf is not None:
+        return _crisis_clf
+    model_path = Path.home() / ".whatsapp_analyser_crisis_model.pkl"
+    try:
+        import pickle
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.pipeline import Pipeline
+
+        if model_path.exists():
+            with open(model_path, "rb") as f:
+                _crisis_clf = pickle.load(f)
+            return _crisis_clf
+
+        # Train on seed data
+        print("[INFO] Training Tier 2 crisis classifier…")
+        texts = [_clean_text_for_rf(t) for t, _ in _CRISIS_SEED]
+        labels = [l for _, l in _CRISIS_SEED]
+        _crisis_clf = Pipeline([
+            ("tfidf", TfidfVectorizer(ngram_range=(1, 2), min_df=1, max_features=500)),
+            ("clf", RandomForestClassifier(n_estimators=120, random_state=42)),
+        ])
+        _crisis_clf.fit(texts, labels)
+        with open(model_path, "wb") as f:
+            import pickle as pk
+            pk.dump(_crisis_clf, f)
+        print("[INFO] Tier 2 classifier trained and cached.")
+    except ImportError:
+        print("[WARN] scikit-learn not installed — Tier 2 crisis classifier disabled.")
+        _crisis_clf = None
+    except Exception as e:
+        print(f"[WARN] Tier 2 classifier error: {e}")
+        _crisis_clf = None
+    return _crisis_clf
+
+
+def add_tier2_crisis_scores(chat: dict) -> None:
+    """Run Tier 2 RF on messages not already flagged by Tier 1; mark high-confidence positives."""
+    clf = _load_crisis_classifier()
+    if clf is None:
+        return
+    try:
+        unflagged = [
+            (i, msg) for i, msg in enumerate(chat["messages"])
+            if "CRISIS_FLAG" not in msg.get("intents", [])
+        ]
+        if not unflagged:
+            return
+        texts = [_clean_text_for_rf(msg["text"]) for _, msg in unflagged]
+        probs = clf.predict_proba(texts)
+        crisis_idx = list(clf.classes_).index(1)
+        for (i, msg), prob in zip(unflagged, probs):
+            score = prob[crisis_idx]
+            msg["crisis_rf_score"] = round(score, 3)
+            if score >= 0.65:
+                msg.setdefault("intents", []).append("CRISIS_FLAG")
+                msg["crisis_dimension"] = "behavioral"
+                msg["crisis_level"] = 3
+                msg["crisis_source"] = "tier2_rf"
+    except Exception as e:
+        print(f"[WARN] Tier 2 scoring failed: {e}")
+
+
 def _build_crisis_flags_with_context(messages: list) -> list:
     """Build crisis flag records including surrounding message context."""
     flags = []
@@ -857,6 +1012,9 @@ def _build_crisis_flags_with_context(messages: list) -> list:
             "date": str(m["date"]),
             "text": m["text"][:300],
             "sender": m["sender"],
+            "crisis_dimension": m.get("crisis_dimension", "unknown"),
+            "crisis_level": m.get("crisis_level", 2),
+            "crisis_source": m.get("crisis_source", "tier1_regex"),
             "context_before": [
                 {"sender": messages[j]["sender"], "text": messages[j]["text"][:200]}
                 for j in range(max(0, i - 3), i)
@@ -875,6 +1033,7 @@ def run_per_chat_analysis(chat: dict, engine: str, custom_topics: list) -> None:
     add_sentiment_scores(chat, engine)
     add_intents(chat)
     label_exchanges(chat)
+    add_tier2_crisis_scores(chat)
 
     # Re-run intent after exchange labelling (exchange start intents added in label_exchanges)
     chat["analytics"] = {
@@ -2274,8 +2433,18 @@ function renderCrisisContent(el, chats) {{
       const assessed=CRISIS_ASSESSED[chat.name]?.[i];
       const literalBadge=assessed&&assessed.is_literal_risk===true
         ?`<span style="background:#fee2e2;color:#991b1b;font-size:11px;padding:2px 6px;border-radius:3px;margin-left:6px;font-weight:600">confirmed risk</span>`:"";
+      const dimLabels={{cognitive:"Cognitive",behavioral:"Behavioral",emotional:"Emotional",unknown:"Unknown"}};
+      const levelColors={{1:"#d97706",2:"#dc2626",3:"#7c1d1d"}};
+      const levelBg={{1:"#fef3c7",2:"#fee2e2",3:"#fce7e7"}};
+      const levelLabels={{1:"Moderate Risk",2:"Elevated Risk",3:"Critical Risk"}};
+      const dim=f.crisis_dimension||"unknown";
+      const lvl=f.crisis_level||2;
+      const src=f.crisis_source||"tier1_regex";
+      const srcLabel=src==="tier2_rf"?" · ML":"";
+      const dimBadge=`<span style="background:#e0e7ff;color:#3730a3;font-size:11px;padding:2px 6px;border-radius:3px;margin-left:6px;font-weight:600">${{dimLabels[dim]||dim}}</span>`;
+      const levelBadge=`<span style="background:${{levelBg[lvl]}};color:${{levelColors[lvl]}};font-size:11px;padding:2px 6px;border-radius:3px;margin-left:4px;font-weight:600">${{levelLabels[lvl]||"Risk"}}${{srcLabel}}</span>`;
       html+=`<div style="border:1px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:10px">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${{fmt(f.date)}}${{f.sender?` · <b>${{esc(f.sender)}}</b>`:""}}${{literalBadge}}</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${{fmt(f.date)}}${{f.sender?` · <b>${{esc(f.sender)}}</b>`:""}}${{dimBadge}}${{levelBadge}}${{literalBadge}}</div>
         <div style="font-size:13px">${{esc(f.text)}}</div>
         ${{assessed?`<div style="margin-top:8px;font-size:12px;background:var(--bg);padding:8px;border-radius:4px">
           <b>AI assessment:</b> ${{esc(assessed.assessment)}} (${{esc(assessed.confidence)}} confidence)
