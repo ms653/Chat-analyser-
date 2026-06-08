@@ -1960,7 +1960,7 @@ a{{color:var(--contact)}}
 .sb-tag{{display:inline-block;font-size:10px;padding:1px 6px;border-radius:8px;background:var(--bg);border:1px solid var(--border);margin:3px 2px 0 0}}
 .sb-flag{{display:inline-block;font-size:11px;color:var(--warn);margin-top:3px}}
 .main-area{{flex:1;min-width:0;display:flex;flex-direction:column}}
-.tabs{{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;display:flex;gap:0;overflow-x:auto}}
+.tabs{{background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px;display:flex;gap:0;overflow-x:auto;position:sticky;top:60px;z-index:99;box-shadow:var(--shadow)}}
 .tab-btn{{padding:12px 18px;border:none;background:transparent;cursor:pointer;font-size:14px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s}}
 .tab-btn.active{{color:var(--contact);border-bottom-color:var(--contact)}}
 .main{{padding:24px}}
