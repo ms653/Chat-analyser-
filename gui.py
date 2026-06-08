@@ -689,6 +689,10 @@ function chatHTML(id, d) {
           <button class="btn btn-ghost" onclick="pick(${id},'fw')">Browse…</button>
         </div>
       </div>
+      <div class="fld">
+        <label>Date format <span style="font-weight:400;color:var(--muted)">(optional — leave blank for auto-detect)</span></label>
+        <input type="text" id="hf-${id}" placeholder="e.g. [%d/%m/%y, %H:%M:%S] %name: %text" value="${ea(d.hformat||'')}">
+      </div>
     </div>
   </div>`;
 }
@@ -775,6 +779,7 @@ function buildConfig() {
       contact_relationship: document.getElementById(`r-${id}`)?.value||'',
       tags: (document.getElementById(`t-${id}`)?.value||'').split(',').map(x=>x.trim()).filter(Boolean),
       framework: document.getElementById(`w-${id}`)?.value||null,
+      hformat: document.getElementById(`hf-${id}`)?.value||null,
     });
   });
   return {

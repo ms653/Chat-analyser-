@@ -61,6 +61,130 @@ MSG_RE = re.compile(
     r"(.+?):\s(.+)$"
 )
 
+
+def _hformat_to_regex(hformat: str) -> re.Pattern:
+    """Translate a simplified WhatsApp hformat string to a compiled regex.
+
+    Tokens: %d %m %y %Y %H %I %M %S %p %name %text
+    Captures named groups: date_str, time_str, sender, text.
+    Example: "[%d/%m/%y, %H:%M:%S] %name: %text"
+    """
+    _TOKEN_MAP = {
+        "%Y": r"(?P<year>\d{4})",
+        "%y": r"(?P<year>\d{2,4})",
+        "%d": r"(?P<day>\d{1,2})",
+        "%m": r"(?P<month>\d{1,2})",
+        "%H": r"(?P<hour>\d{1,2})",
+        "%I": r"(?P<hour12>\d{1,2})",
+        "%M": r"(?P<minute>\d{2})",
+        "%S": r"(?P<second>\d{2})",
+        "%p": r"(?P<ampm>[APap][Mm])",
+        "%name": r"(?P<sender>.+?)",
+        "%text": r"(?P<text>.+)",
+    }
+    parts = re.split(r"(%[a-zA-Z]+)", hformat)
+    pattern = r"^[‎‏]?"
+    for part in parts:
+        pattern += _TOKEN_MAP.get(part, re.escape(part))
+    pattern += r"$"
+    return re.compile(pattern)
+
+
+class ProgrammaticWhatsAppParser:
+    """Class-based WhatsApp parser. Accepts optional hformat for custom date layouts.
+
+    When hformat is None, falls back to the global MSG_RE auto-detection pattern.
+    """
+
+    def __init__(self, config: dict, hformat: Optional[str] = None):
+        self.config = config
+        self.hformat = hformat
+        self._use_named = hformat is not None
+        self.msg_re: re.Pattern = _hformat_to_regex(hformat) if hformat else MSG_RE
+
+    def generate_regex_patterns(self, hformat: str) -> re.Pattern:
+        return _hformat_to_regex(hformat)
+
+    def _extract_groups(self, m: re.Match) -> Optional[tuple]:
+        """Return (date_str, time_str, sender, text) from a match object."""
+        try:
+            if self._use_named:
+                gd = m.groupdict()
+                year = gd.get("year", "")
+                day = gd.get("day", "")
+                month = gd.get("month", "")
+                hour = gd.get("hour") or gd.get("hour12") or "00"
+                minute = gd.get("minute", "00")
+                second = gd.get("second", "")
+                ampm = gd.get("ampm", "")
+                date_str = f"{day}/{month}/{year}" if day and month and year else ""
+                time_parts = f"{hour}:{minute}"
+                if second:
+                    time_parts += f":{second}"
+                if ampm:
+                    time_parts += f" {ampm}"
+                return date_str, time_parts, gd.get("sender", ""), gd.get("text", "")
+            else:
+                return m.group(1), m.group(2), m.group(3), m.group(4)
+        except (IndexError, AttributeError):
+            return None
+
+    def parse(self) -> dict:
+        """Parse the chat file and return a chat object."""
+        path = self.config["file"]
+        contact = self.config["contact_name"]
+        messages: list = []
+
+        try:
+            raw = Path(path).read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            print(f"[WARN] Chat file not found: {path}", file=sys.stderr)
+            return _empty_chat(self.config)
+
+        current = None
+        for line in raw.splitlines():
+            m = self.msg_re.match(line)
+            if m:
+                if current and not _is_noise(current["text"]):
+                    messages.append(current)
+                groups = self._extract_groups(m)
+                if not groups:
+                    continue
+                date_str, time_str, sender, text = groups
+                dt = _parse_dt(date_str, time_str)
+                sender = sender.strip().strip('‎‏‪‬')
+                is_user = sender.lower() == PRIMARY_USER_NAME.lower()
+                current = {
+                    "dt": dt,
+                    "date": dt.date() if dt else None,
+                    "sender": sender,
+                    "is_user": is_user,
+                    "text": text.strip(),
+                    "raw": line,
+                }
+            elif current is not None:
+                current["text"] += " " + line.strip()
+
+        if current and not _is_noise(current["text"]):
+            messages.append(current)
+
+        framework_content = None
+        fw_path = self.config.get("framework")
+        if fw_path:
+            try:
+                framework_content = Path(fw_path).read_text(encoding="utf-8", errors="replace")
+            except FileNotFoundError:
+                print(f"[WARN] Framework file not found: {fw_path}", file=sys.stderr)
+
+        return {
+            "config": self.config,
+            "messages": messages,
+            "framework_content": framework_content,
+            "contact_name": contact,
+            "contact_relationship": self.config.get("contact_relationship", ""),
+            "tags": self.config.get("tags", []),
+        }
+
 NOISE_PATTERNS = [
     re.compile(r"^<.+omitted>$", re.I),
     re.compile(r"^(image|video|audio|GIF|sticker|document|contact card) omitted$", re.I),
@@ -129,59 +253,8 @@ def detect_senders(file_path: str, sample_size: int = 400) -> list:
 
 
 def parse_chat(config: dict) -> dict:
-    """Parse a single WhatsApp export file. Returns a chat object."""
-    path = config["file"]
-    contact = config["contact_name"]
-    messages = []
-
-    try:
-        raw = Path(path).read_text(encoding="utf-8", errors="replace")
-    except FileNotFoundError:
-        print(f"[WARN] Chat file not found: {path}", file=sys.stderr)
-        return _empty_chat(config)
-
-    current = None
-    for line in raw.splitlines():
-        m = MSG_RE.match(line)
-        if m:
-            if current and not _is_noise(current["text"]):
-                messages.append(current)
-            date_str, time_str, sender, text = m.groups()
-            dt = _parse_dt(date_str, time_str)
-            sender = sender.strip().strip('‎‏‪‬')
-            is_user = sender.lower() == PRIMARY_USER_NAME.lower()
-            current = {
-                "dt": dt,
-                "date": dt.date() if dt else None,
-                "sender": sender,
-                "is_user": is_user,
-                "text": text.strip(),
-                "raw": line,
-            }
-        elif current is not None:
-            # continuation line
-            current["text"] += " " + line.strip()
-
-    if current and not _is_noise(current["text"]):
-        messages.append(current)
-
-    # Load framework file if specified
-    framework_content = None
-    fw_path = config.get("framework")
-    if fw_path:
-        try:
-            framework_content = Path(fw_path).read_text(encoding="utf-8", errors="replace")
-        except FileNotFoundError:
-            print(f"[WARN] Framework file not found: {fw_path}", file=sys.stderr)
-
-    return {
-        "config": config,
-        "messages": messages,
-        "framework_content": framework_content,
-        "contact_name": contact,
-        "contact_relationship": config.get("contact_relationship", ""),
-        "tags": config.get("tags", []),
-    }
+    """Parse a single WhatsApp export file. Delegates to ProgrammaticWhatsAppParser."""
+    return ProgrammaticWhatsAppParser(config, config.get("hformat")).parse()
 
 
 def _empty_chat(config: dict) -> dict:
