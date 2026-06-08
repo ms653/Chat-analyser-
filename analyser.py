@@ -477,6 +477,13 @@ DISTRESS_KW = [
     r"\bcan['']t (go on|cope|do this|bear it|take it)\b",
     r"\bnever (get|feel|have|see)\b.{0,30}\b(better|happy|anyone|loved)\b",
     r"\bsince (dad|he|she|they) (died|left|passed|went)\b",
+    # Mental health terms — clearly distress but below crisis threshold
+    r"\b(anxious|anxiety|panicking|panic attack)\b",
+    r"\b(depressed|depression|low mood|feeling low)\b",
+    r"\b(overwhelmed|struggling|can['']t cope|not coping)\b",
+    r"\b(self.worth|self.esteem|hate myself|hate my life)\b",
+    r"\b(no (energy|motivation)|can['']t get (up|out of bed)|exhausted and (sad|low|down))\b",
+    r"\b(nobody understands?|nobody listens?|nobody (cares?|notices?))\b",
 ]
 
 # Structured crisis taxonomy — 3 active dimensions with risk levels

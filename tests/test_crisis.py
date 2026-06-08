@@ -91,10 +91,20 @@ class TestClassifyIntentCrisisTier1:
         assert "CRISIS_FLAG" not in intents
 
     def test_distress_signal_separate_from_crisis(self):
-        msg = self._msg("I feel so lonely and nobody cares about me")
+        msg = self._msg("I've been feeling really anxious and depressed lately")
         intents = classify_intent(msg)
         assert "DISTRESS_SIGNAL" in intents
         assert "CRISIS_FLAG" not in intents
+
+    def test_panic_attack_is_distress(self):
+        msg = self._msg("I had a panic attack at work today")
+        intents = classify_intent(msg)
+        assert "DISTRESS_SIGNAL" in intents
+
+    def test_overwhelmed_is_distress(self):
+        msg = self._msg("I just can't cope with everything right now, I'm completely overwhelmed")
+        intents = classify_intent(msg)
+        assert "DISTRESS_SIGNAL" in intents
 
     def test_crisis_source_default_tier1(self):
         msg = self._msg("I don't want to be here anymore")
