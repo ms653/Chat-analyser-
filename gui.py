@@ -436,6 +436,17 @@ class AnalyserAPI:
             self._ulog("ERROR: Project folder not found.")
             return
         try:
+            # Resolve the real Python interpreter.
+            # Inside a frozen .app sys.executable is the app binary itself, not Python —
+            # using it for pip/PyInstaller would silently re-launch the app instead.
+            if getattr(sys, "frozen", False):
+                python_exec = shutil.which("python3") or shutil.which("python")
+                if not python_exec:
+                    self._ulog("ERROR: Python 3 not found on PATH. Install Python 3 and try again.")
+                    return
+            else:
+                python_exec = sys.executable
+
             # 1 — Pull latest (check_for_updates may have already done this; safe to repeat)
             self._ulog("Pulling latest code from GitHub…")
             r = subprocess.run(
@@ -456,7 +467,7 @@ class AnalyserAPI:
             req = proj / "requirements.txt"
             if req.exists():
                 r2 = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "-r", str(req), "-q"],
+                    [python_exec, "-m", "pip", "install", "-r", str(req), "-q"],
                     capture_output=True, text=True, timeout=120,
                 )
                 self._ulog("Dependencies up to date." if r2.returncode == 0
@@ -466,10 +477,11 @@ class AnalyserAPI:
             sha_file = proj / "build_sha.txt"
             try:
                 current_sha = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
+                    ["git", "rev-parse", "--short", "HEAD"],
                     capture_output=True, text=True, cwd=str(proj),
                 ).stdout.strip()
                 sha_file.write_text(current_sha)
+                self._ulog(f"Building from {current_sha}…")
             except Exception:
                 pass
 
@@ -478,14 +490,14 @@ class AnalyserAPI:
             spec_file = proj / "WhatsApp Analyser.spec"
             if spec_file.exists():
                 build_cmd = [
-                    sys.executable, "-m", "PyInstaller",
+                    python_exec, "-m", "PyInstaller",
                     str(spec_file),
                     "--noconfirm",
                 ]
             else:
                 # Fallback if spec is missing
                 build_cmd = [
-                    sys.executable, "-m", "PyInstaller",
+                    python_exec, "-m", "PyInstaller",
                     "--windowed", "--onedir",
                     "--name", "WhatsApp Analyser",
                     "--hidden-import", "webview",
@@ -497,12 +509,8 @@ class AnalyserAPI:
                 ]
             r3 = subprocess.run(
                 build_cmd,
-                capture_output=True, text=True, cwd=str(proj), timeout=300,
+                capture_output=True, text=True, cwd=str(proj), timeout=360,
             )
-            try:
-                sha_file.unlink()
-            except Exception:
-                pass
 
             if r3.returncode != 0:
                 self._ulog(f"Build failed:\n{r3.stderr[-600:]}")
