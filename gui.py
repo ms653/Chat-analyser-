@@ -436,7 +436,7 @@ class AnalyserAPI:
             self._ulog("ERROR: Project folder not found.")
             return
         try:
-            # 1 — Pull (already done in check_for_updates, but safe to repeat)
+            # 1 — Pull latest (check_for_updates may have already done this; safe to repeat)
             self._ulog("Pulling latest code from GitHub…")
             r = subprocess.run(
                 ["git", "pull", "origin", "main"],
@@ -445,7 +445,11 @@ class AnalyserAPI:
             if r.returncode != 0:
                 self._ulog(f"Git pull failed: {r.stderr.strip()}")
                 return
-            self._ulog(r.stdout.strip() or "Already at latest — rebuilding.")
+            pull_msg = r.stdout.strip().lower()
+            if "already up to date" in pull_msg:
+                self._ulog("✓ Source code is current — proceeding to rebuild…")
+            else:
+                self._ulog(r.stdout.strip())
 
             # 2 — Dependencies
             self._ulog("Checking dependencies…")
@@ -469,10 +473,18 @@ class AnalyserAPI:
             except Exception:
                 pass
 
-            # 4 — Rebuild .app
+            # 4 — Rebuild .app using the spec file (preserves all hidden imports)
             self._ulog("Rebuilding app — this takes about a minute…")
-            r3 = subprocess.run(
-                [
+            spec_file = proj / "WhatsApp Analyser.spec"
+            if spec_file.exists():
+                build_cmd = [
+                    sys.executable, "-m", "PyInstaller",
+                    str(spec_file),
+                    "--noconfirm",
+                ]
+            else:
+                # Fallback if spec is missing
+                build_cmd = [
                     sys.executable, "-m", "PyInstaller",
                     "--windowed", "--onedir",
                     "--name", "WhatsApp Analyser",
@@ -482,7 +494,9 @@ class AnalyserAPI:
                     "--add-data", "build_sha.txt:.",
                     "--noconfirm",
                     str(proj / "gui.py"),
-                ],
+                ]
+            r3 = subprocess.run(
+                build_cmd,
                 capture_output=True, text=True, cwd=str(proj), timeout=300,
             )
             try:
