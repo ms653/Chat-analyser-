@@ -405,9 +405,11 @@ class AnalyserAPI:
                     capture_output=True, text=True, cwd=str(proj),
                 ).stdout.strip()
 
-            # Compare the running .app's baked-in SHA against the current source
+            # Compare the running .app's baked-in SHA against the current source.
+            # build_sha may be a 7-char short SHA; local is the full 40-char SHA —
+            # use startswith() so they compare correctly regardless of length.
             build_sha = _get_build_sha()
-            if build_sha and build_sha != local:
+            if build_sha and not local.startswith(build_sha):
                 log = subprocess.run(
                     ["git", "log", "--oneline", f"{build_sha}..HEAD"],
                     capture_output=True, text=True, cwd=str(proj),
@@ -462,16 +464,9 @@ class AnalyserAPI:
             else:
                 self._ulog(r.stdout.strip())
 
-            # 2 — Dependencies
-            self._ulog("Checking dependencies…")
-            req = proj / "requirements.txt"
-            if req.exists():
-                r2 = subprocess.run(
-                    [python_exec, "-m", "pip", "install", "-r", str(req), "-q"],
-                    capture_output=True, text=True, timeout=120,
-                )
-                self._ulog("Dependencies up to date." if r2.returncode == 0
-                           else f"Dependency warning: {r2.stderr[:200]}")
+            # 2 — Skip heavy dependency install during update (packages are already
+            #     bundled in the .app; pip would re-download torch/transformers needlessly)
+            self._ulog("Skipping dependency install (packages already bundled)…")
 
             # 3 — Write build SHA so the new .app knows what it was built from
             sha_file = proj / "build_sha.txt"
