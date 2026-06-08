@@ -878,6 +878,90 @@ def extract_person_mentions(chat: dict, min_count: int = 4) -> dict:
     return people
 
 
+def run_absa(chat: dict, base_url: str, model: str) -> dict:
+    """ABSA Call 8 — send message batches to Gemma; return entity→valence mapping."""
+    messages = chat["messages"]
+    BATCH = 15
+    entity_data: dict = defaultdict(lambda: {"valences": [], "excerpts": []})
+
+    for i in range(0, len(messages), BATCH):
+        batch = messages[i:i + BATCH]
+        formatted = "\n".join(
+            f"[{j + 1}] {m['sender']}: {m['text'][:200]}"
+            for j, m in enumerate(batch)
+        )
+        prompt = (
+            "Analyse these chat messages and identify named people who are being TALKED ABOUT "
+            "(not the message senders). For each mentioned person score how they are being "
+            "discussed: valence from -1.0 (very negative) to +1.0 (very positive), 0 = neutral.\n"
+            "Return ONLY valid JSON — an array, one object per (entity, message) pair found:\n"
+            '[{"entity":"Name","valence":0.5,"reasoning":"brief reason","message_index":1}]\n'
+            "If no named third-parties are discussed return: []\n\n"
+            f"Messages:\n{formatted}"
+        )
+        try:
+            raw = _ollama_chat(prompt, base_url, model)
+            start = raw.find("[")
+            end = raw.rfind("]") + 1
+            if start == -1 or end <= 0:
+                continue
+            results = json.loads(raw[start:end])
+            for r in results:
+                entity = str(r.get("entity", "")).strip()
+                valence = r.get("valence")
+                reasoning = str(r.get("reasoning", ""))
+                msg_idx = int(r.get("message_index", 0)) - 1
+                if not entity or valence is None:
+                    continue
+                try:
+                    valence = max(-1.0, min(1.0, float(valence)))
+                except (TypeError, ValueError):
+                    continue
+                entity_data[entity]["valences"].append(valence)
+                if len(entity_data[entity]["excerpts"]) < 5 and 0 <= msg_idx < len(batch):
+                    entity_data[entity]["excerpts"].append({
+                        "text": batch[msg_idx]["text"][:200],
+                        "reasoning": reasoning,
+                        "valence": valence,
+                    })
+        except Exception as e:
+            print(f"[WARN] ABSA batch {i // BATCH + 1} failed: {e}")
+
+    result = {}
+    for entity, data in entity_data.items():
+        if not data["valences"]:
+            continue
+        avg = sum(data["valences"]) / len(data["valences"])
+        result[entity] = {
+            "avg_valence": round(avg, 3),
+            "valence_history": data["valences"],
+            "aspect_excerpts": data["excerpts"],
+        }
+    return result
+
+
+def merge_absa_into_people(people: dict, absa_per_chat: list) -> None:
+    """Merge per-chat ABSA valence results into the merged people dict (in-place)."""
+    combined: dict = defaultdict(lambda: {"valences": [], "excerpts": []})
+    for absa in absa_per_chat:
+        for entity, data in absa.items():
+            combined[entity]["valences"].extend(data.get("valence_history", []))
+            combined[entity]["excerpts"].extend(data.get("aspect_excerpts", []))
+
+    for entity, data in combined.items():
+        if not data["valences"]:
+            continue
+        avg = sum(data["valences"]) / len(data["valences"])
+        # Try exact match then case-insensitive
+        matched = entity if entity in people else next(
+            (k for k in people if k.lower() == entity.lower()), None
+        )
+        if matched:
+            people[matched]["avg_valence"] = round(avg, 3)
+            people[matched]["valence_history"] = data["valences"]
+            people[matched]["aspect_excerpts"] = data["excerpts"][:8]
+
+
 # ── Tier 2: Random Forest crisis classifier ──────────────────────────────────
 
 _CRISIS_SEED: list = [
@@ -2594,21 +2678,51 @@ function renderPeople(el) {{
     const label=ai.sentiment_label||"";
     const warn=ai.warning_flag||"";
     const sd=p.sentiment_dist||{{}};
-    html+=`<div class="person-card">
-      <div class="name">${{esc(name)}} <span style="font-size:12px;color:var(--muted);font-weight:400">×${{p.count}} mentions · ${{p.chats.join(", ")}}</span></div>
-      ${{label?`<div class="label">${{esc(label)}}</div>`:""}}
-      <div class="sentiment-bar">
+    const hasAbsa=typeof p.avg_valence==="number";
+    let valenceHtml="";
+    if(hasAbsa){{
+      const av=p.avg_valence;
+      const pct=Math.round(((av+1)/2)*100);
+      const col=av>0.1?"#22c55e":av<-0.1?"#ef4444":"#9ca3af";
+      valenceHtml=`<div style="margin-bottom:8px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:3px">
+          ABSA valence: <b style="color:${{col}}">${{av>=0?"+":""}}${{av.toFixed(2)}}</b>
+          <span style="font-size:10px;color:var(--muted)"> (−1.0 negative → +1.0 positive)</span>
+        </div>
+        <div style="position:relative;height:8px;border-radius:4px;background:linear-gradient(to right,#ef4444,#9ca3af,#22c55e);overflow:visible">
+          <div style="position:absolute;top:-3px;left:calc(${{pct}}% - 2px);width:4px;height:14px;background:#111;border-radius:2px"></div>
+        </div>
+      </div>`;
+    }} else {{
+      valenceHtml=`<div class="sentiment-bar">
         <div class="sb-pos" style="width:${{sd.positive||0}}%"></div>
         <div class="sb-neu" style="width:${{sd.neutral||0}}%"></div>
         <div class="sb-neg" style="width:${{sd.negative||0}}%"></div>
       </div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">+${{sd.positive||0}}% / =${{sd.neutral||0}}% / -${{sd.negative||0}}%</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">+${{sd.positive||0}}% / =${{sd.neutral||0}}% / -${{sd.negative||0}}%</div>`;
+    }}
+    const absa_excerpts=p.aspect_excerpts||[];
+    html+=`<div class="person-card">
+      <div class="name">${{esc(name)}} <span style="font-size:12px;color:var(--muted);font-weight:400">×${{p.count}} mentions · ${{p.chats.join(", ")}}</span></div>
+      ${{label?`<div class="label">${{esc(label)}}</div>`:""}}
+      ${{valenceHtml}}
       ${{warn?`<div style="background:#fef3c7;border-radius:4px;padding:8px;font-size:12px;margin-bottom:8px">⚠ ${{esc(warn)}}</div>`:""}}
       ${{summary?`<div class="summary">${{esc(summary)}}</div>`:""}}
       <textarea class="note" placeholder="Add your own notes about ${{name}}…" onchange="savePersonEdit('${{name}}',this.value)">${{esc(saved)}}</textarea>
-      ${{p.excerpts&&p.excerpts.length?`<details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">Show message excerpts</summary><div style="margin-top:8px">
+      ${{absa_excerpts.length?`<details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">Show ABSA reasoning excerpts (${{absa_excerpts.length}})</summary><div style="margin-top:8px">
+        ${{absa_excerpts.map(e=>{{
+          const vc=e.valence>0.1?"#22c55e":e.valence<-0.1?"#ef4444":"#9ca3af";
+          return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
+            <span style="color:${{vc}};font-weight:600">${{e.valence>=0?"+":""}}${{e.valence.toFixed(2)}}</span>
+            — "${{esc(e.text.slice(0,180))}}"
+            ${{e.reasoning?`<div style="font-size:11px;color:var(--muted);font-style:italic;margin-top:2px">${{esc(e.reasoning)}}</div>`:""}}
+          </div>`;
+        }}).join("")}}
+      </div></details>`
+      :p.excerpts&&p.excerpts.length?`<details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">Show message excerpts</summary><div style="margin-top:8px">
         ${{p.excerpts.map(e=>`<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">"${{esc(e.slice(0,200))}}"</div>`).join("")}}
-      </div></details>`:""}}</div>`;
+      </div></details>`:""
+      }}</div>`;
   }});
   html+=`</div>`;
   el.innerHTML=html;
@@ -2818,6 +2932,14 @@ def main():
             ai_results["coping_analysis"][chat["contact_name"]] = ai_coping_analysis(
                 chat, base_url, model
             )
+
+        # Call 8 — ABSA entity-valence mapping (per chat)
+        absa_per_chat = []
+        for chat in chats:
+            print(f"[AI] ABSA entity-sentiment for {chat['contact_name']}…")
+            absa = run_absa(chat, base_url, model)
+            absa_per_chat.append(absa)
+        merge_absa_into_people(cross_chat["merged_people"], absa_per_chat)
 
     # ── Token log
     if args.log_tokens and TOKEN_LOG:
