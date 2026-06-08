@@ -865,12 +865,14 @@ details[open] summary::before{transform:rotate(90deg)}
   </div>
 
   <!-- History -->
-  <div class="card" id="historyCard" style="display:none">
+  <div class="card" id="historyCard">
     <div class="card-head" style="margin-bottom:12px">
       <div class="step" style="background:#4a5568">H</div>
       <h2>Previous analyses</h2>
     </div>
-    <div id="histList"></div>
+    <div id="histList">
+      <p style="font-size:13px;color:var(--muted);padding:4px 0">No saved analyses yet — your next run will appear here automatically.</p>
+    </div>
   </div>
 
   <!-- Run -->
@@ -1162,12 +1164,13 @@ async function refreshOllamaModels(savedModel) {
 
 // ── History ───────────────────────────────────────────────────────────────────
 async function loadHistory() {
+  const list = document.getElementById('histList');
   try {
     const items = await pywebview.api.list_history();
-    const card = document.getElementById('historyCard');
-    const list = document.getElementById('histList');
-    if (!items || !items.length) { card.style.display = 'none'; return; }
-    card.style.display = 'block';
+    if (!items || !items.length) {
+      list.innerHTML = '<p style="font-size:13px;color:var(--muted);padding:4px 0">No saved analyses yet — your next run will appear here automatically.</p>';
+      return;
+    }
     list.innerHTML = '';
     items.forEach(item => {
       const row = document.createElement('div');
@@ -1178,7 +1181,9 @@ async function loadHistory() {
       row.addEventListener('click', () => openHistory(item.path));
       list.appendChild(row);
     });
-  } catch(e) { console.error('loadHistory error:', e); }
+  } catch(e) {
+    list.innerHTML = '<p style="font-size:13px;color:var(--muted);padding:4px 0">No saved analyses yet — your next run will appear here automatically.</p>';
+  }
 }
 
 async function openHistory(path) {
@@ -1190,7 +1195,9 @@ async function deleteHistory(path, row) {
     await pywebview.api.delete_history(path);
     row.remove();
     const list = document.getElementById('histList');
-    if (!list.children.length) document.getElementById('historyCard').style.display = 'none';
+    if (!list.children.length) {
+      list.innerHTML = '<p style="font-size:13px;color:var(--muted);padding:4px 0">No saved analyses yet — your next run will appear here automatically.</p>';
+    }
   } catch(e) {}
 }
 
