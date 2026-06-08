@@ -6,6 +6,7 @@ The config form and analysis output both live inside this one window.
 """
 
 import os
+import re
 import sys
 import json
 import shutil
@@ -108,6 +109,9 @@ class AnalyserAPI:
 
     def __init__(self):
         self._window = None
+        self._chats = None          # list of parsed chat dicts, set after analysis
+        self._ollama_base = ""
+        self._ollama_model = ""
 
     def set_window(self, w):
         self._window = w
@@ -177,6 +181,128 @@ class AnalyserAPI:
     def go_back(self):
         """Return to the config form from the results view."""
         self._window.load_html(CONFIG_HTML)
+
+    # ── Live AI — Chat Q&A ───────────────────────────────────────────────────
+
+    def chat_qa(self, chat_id: str, question: str) -> str:
+        """Answer a question about a specific chat (or all chats) using Ollama."""
+        if not self._chats:
+            return "No chat data available. Please run an analysis first."
+        if not self._ollama_base or not self._ollama_model:
+            return "Ollama not configured. Please run an analysis first."
+
+        q_lower = question.lower()
+        q_words = [w for w in q_lower.split() if len(w) > 2]
+
+        # Gather candidate messages
+        if chat_id == "all":
+            all_msgs = [
+                {**m, "_chat": c["contact_name"]}
+                for c in self._chats
+                for m in c["messages"]
+            ]
+        else:
+            chat = next(
+                (c for c in self._chats
+                 if re.sub(r"\W+", "_", c["contact_name"]) == chat_id
+                 or c["contact_name"] == chat_id),
+                None,
+            )
+            if not chat:
+                return f"Chat '{chat_id}' not found."
+            all_msgs = [{**m, "_chat": chat["contact_name"]} for m in chat["messages"]]
+
+        # Rank by keyword match count, break ties by recency (index)
+        def _score(item):
+            idx, m = item
+            text_lower = (m.get("text") or "").lower()
+            match_count = sum(1 for w in q_words if w in text_lower)
+            return (match_count, idx)  # higher idx = more recent
+
+        ranked = sorted(enumerate(all_msgs), key=_score, reverse=True)
+        top_msgs = [m for _, m in ranked[:40]]
+        # Sort selected messages chronologically for readability
+        top_msgs.sort(key=lambda m: str(m.get("date") or ""))
+
+        # Build prompt
+        chat_label = "all conversations" if chat_id == "all" else chat_id
+        lines = []
+        for m in top_msgs:
+            chat_prefix = f"[{m['_chat']}] " if chat_id == "all" else ""
+            lines.append(f"[{m.get('date')} {m.get('sender')}] {chat_prefix}{(m.get('text') or '')[:300]}")
+
+        prompt = (
+            f"You are answering a question about the following WhatsApp messages from {chat_label}.\n\n"
+            f"Question: {question}\n\n"
+            f"Relevant messages:\n" + "\n".join(lines) + "\n\n"
+            "Answer concisely and specifically, referencing what the messages actually say. "
+            "If you cannot answer from the messages provided, say so."
+        )
+        result = analyser._ollama_chat(
+            [{"role": "user", "content": prompt}],
+            self._ollama_base,
+            self._ollama_model,
+            json_mode=False,
+        )
+        return result or "No response from Ollama."
+
+    # ── Live AI — Mood Explainer ─────────────────────────────────────────────
+
+    def explain_period(self, chat_id: str, date_str: str) -> str:
+        """Explain the emotional tone of messages around a given date."""
+        import datetime as _dt
+        if not self._chats:
+            return "No chat data available. Please run an analysis first."
+        if not self._ollama_base or not self._ollama_model:
+            return "Ollama not configured. Please run an analysis first."
+
+        try:
+            centre = _dt.date.fromisoformat(date_str)
+        except (ValueError, TypeError):
+            return f"Invalid date format: {date_str}"
+
+        window_days = 14
+
+        # Collect messages from the ±14-day window
+        window_msgs = []
+        for c in self._chats:
+            if chat_id not in ("all",) and \
+               re.sub(r"\W+", "_", c["contact_name"]) != chat_id and \
+               c["contact_name"] != chat_id:
+                continue
+            for m in c["messages"]:
+                try:
+                    msg_date = _dt.date.fromisoformat(str(m.get("date") or ""))
+                    if abs((msg_date - centre).days) <= window_days:
+                        window_msgs.append({**m, "_chat": c["contact_name"]})
+                except (ValueError, TypeError):
+                    pass
+
+        if not window_msgs:
+            return f"No messages found within {window_days} days of {date_str}."
+
+        # Sort chronologically, cap at 60
+        window_msgs.sort(key=lambda m: str(m.get("date") or ""))
+        window_msgs = window_msgs[:60]
+
+        lines = [
+            f"[{m.get('date')} {m.get('sender')}]: {(m.get('text') or '')[:250]}"
+            for m in window_msgs
+        ]
+        prompt = (
+            f"Here are WhatsApp messages from around {date_str} "
+            f"(±{window_days} days). What themes or events seem to be driving the emotional "
+            "tone during this period? Be specific — reference what is actually being discussed "
+            "in the messages, not generic observations.\n\n"
+            "Messages:\n" + "\n".join(lines)
+        )
+        result = analyser._ollama_chat(
+            [{"role": "user", "content": prompt}],
+            self._ollama_base,
+            self._ollama_model,
+            json_mode=False,
+        )
+        return result or "No response from Ollama."
 
     # ── Updates ──────────────────────────────────────────────────────────────
 
@@ -363,6 +489,10 @@ class AnalyserAPI:
             engine        = config.get("nlp_engine", "textblob")
             custom_topics = config.get("custom_topics", [])
 
+            # Store Ollama config for live API calls
+            self._ollama_base  = config.get("ollama_url", "http://localhost:11434")
+            self._ollama_model = config.get("ollama_model", "gemma4")
+
             # 1 ── Parse chats ────────────────────────────────────────────────
             chats_cfg = config.get("chats", [])
             self._log(f"Parsing {len(chats_cfg)} chat file(s)…")
@@ -407,6 +537,7 @@ class AnalyserAPI:
                 "timeline_highlights": [],
                 "cross_chat_links":    [],
                 "crisis_assessed":     {},
+                "relationship_summary": {},
             }
 
             if not no_ai:
@@ -453,6 +584,15 @@ class AnalyserAPI:
                             ai_results["crisis_assessed"][chat["contact_name"]] = {
                                 i: item for i, item in enumerate(assessed)
                             }
+
+                for chat in chats:
+                    self._log(f"AI ⑨ Relationship summary — {chat['contact_name']}…")
+                    ai_results["relationship_summary"][chat["contact_name"]] = (
+                        analyser.ai_relationship_summary(chat, base, model)
+                    )
+
+            # Store chats for live Q&A / mood explainer calls
+            self._chats = chats
 
             # 5 ── Generate HTML → temp file → read back ──────────────────────
             self._log("Building report…")

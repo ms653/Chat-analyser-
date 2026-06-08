@@ -900,10 +900,35 @@ def run_lda_topics(messages: list, n_topics: int = 5) -> dict:
     except ImportError:
         stop = set()
 
-    _SKIP_PREFIXES = ("<Media omitted", "This message was deleted", "image omitted", "audio omitted")
+    _SKIP_PREFIXES = ("<Media omitted", "This message was deleted", "image omitted",
+                      "audio omitted", "video omitted", "sticker omitted", "GIF omitted")
+
+    # Words that are extremely common in casual chat but carry no topical meaning
+    CHAT_STOP = {
+        # high-frequency chat verbs
+        "think", "know", "going", "want", "need", "like", "get", "got", "getting",
+        "say", "said", "see", "saw", "go", "went", "come", "came", "coming",
+        "make", "made", "take", "took", "give", "gave", "use", "used", "using",
+        "try", "tried", "let", "feel", "felt", "look", "looked", "find", "found",
+        "keep", "kept", "tell", "told", "ask", "asked", "thought", "put", "seem",
+        "mean", "means", "meant", "hope", "loves", "love", "miss", "missed",
+        # filler adjectives/adverbs
+        "good", "great", "nice", "bad", "big", "little", "long", "old", "new",
+        "sure", "right", "really", "actually", "literally", "basically", "probably",
+        "just", "still", "even", "also", "bit", "lot", "way", "bit", "things", "thing",
+        "today", "tonight", "tomorrow", "yesterday", "soon", "already", "always",
+        "never", "maybe", "lol", "haha", "hahaha", "omg", "lmao", "xxx", "xox",
+        # chat-specific noise
+        "omitted", "media", "image", "video", "audio", "sticker", "gif",
+        "message", "deleted", "null", "edited",
+        # ultra-common pronouns/determiners not caught by NLTK
+        "yeah", "yes", "okay", "well", "back", "home", "away", "here", "there",
+        "something", "anything", "nothing", "everything", "someone", "anyone",
+    }
+    stop = stop | CHAT_STOP
 
     def _tokenize(text: str) -> list:
-        tokens = re.findall(r"\b[a-z]{3,}\b", text.lower())
+        tokens = re.findall(r"\b[a-z]{4,}\b", text.lower())  # min length 4
         return [t for t in tokens if t not in stop]
 
     texts, msg_dates = [], []
@@ -919,13 +944,14 @@ def run_lda_topics(messages: list, n_topics: int = 5) -> dict:
         return {}
 
     dictionary = corpora.Dictionary(texts)
-    dictionary.filter_extremes(no_below=2, no_above=0.9)
+    # Drop words in >60% of messages (too generic) or fewer than 3 messages (too rare)
+    dictionary.filter_extremes(no_below=3, no_above=0.6)
     if len(dictionary) < 10:
         return {}
     corpus = [dictionary.doc2bow(t) for t in texts]
 
     lda = gensim_models.LdaModel(
-        corpus, num_topics=n_topics, id2word=dictionary, passes=5, random_state=42
+        corpus, num_topics=n_topics, id2word=dictionary, passes=15, random_state=42
     )
 
     topic_labels = {
@@ -1661,6 +1687,72 @@ def ai_coping_analysis(chat: dict, base_url: str, model: str) -> dict:
     return _parse_json_response(raw, {})
 
 
+def ai_relationship_summary(chat: dict, base_url: str, model: str) -> str:
+    """Call 9 — Write a 2-3 paragraph relationship summary for a single chat."""
+    msgs = chat["messages"]
+    contact = chat["contact_name"]
+    relationship = chat.get("contact_relationship", "")
+
+    # Date range
+    dates = [m["date"] for m in msgs if m["date"]]
+    date_from = str(min(dates)) if dates else "unknown"
+    date_to   = str(max(dates)) if dates else "unknown"
+
+    # Topic keywords
+    topics = list((chat["analytics"].get("topics") or {}).get("counts", {}).keys())[:8]
+
+    # Sentiment stats
+    a = chat["analytics"]
+    init = a.get("initiation_balance", {})
+    ds_count = len(a.get("distress_signals", []))
+    cf_count = len(a.get("crisis_flags", []))
+
+    # Sample messages spread across the timeline — early, middle, recent + emotionally significant
+    n = len(msgs)
+    indices = set()
+    # Early 4, middle 4, recent 4
+    for i in range(min(4, n)):
+        indices.add(i)
+    for i in range(max(0, n // 2 - 2), min(n, n // 2 + 2)):
+        indices.add(i)
+    for i in range(max(0, n - 4), n):
+        indices.add(i)
+    # Emotionally significant: high abs sentiment
+    scored = sorted(
+        range(n),
+        key=lambda i: abs(msgs[i].get("sentiment", {}).get("score", 0) or 0),
+        reverse=True,
+    )
+    for i in scored[:5]:
+        indices.add(i)
+
+    sample_msgs = [msgs[i] for i in sorted(indices)][:15]
+    sample_lines = "\n".join(
+        f"[{m['date']} {m['sender']}]: {m['text'][:200]}"
+        for m in sample_msgs
+    )
+
+    prompt = (
+        f"You are reviewing a WhatsApp chat history between {PRIMARY_USER_NAME} and "
+        f"{contact}{' (' + relationship + ')' if relationship else ''}.\n\n"
+        f"Date range: {date_from} to {date_to}\n"
+        f"Total messages: {len(msgs):,}\n"
+        f"Initiation: {PRIMARY_USER_NAME} starts {init.get('user_pct', '?')}% of conversations\n"
+        f"Top topics: {', '.join(topics) if topics else 'not available'}\n"
+        f"Distress signals detected: {ds_count}\n"
+        f"Crisis flags detected: {cf_count}\n\n"
+        f"Sample messages from across the timeline:\n{sample_lines}\n\n"
+        "Write 2-3 paragraphs covering:\n"
+        "1. The nature of this relationship and what it seems to mean to both parties\n"
+        "2. Communication patterns — who drives the conversation, tone, frequency\n"
+        "3. How the relationship appears to have evolved over the date range\n\n"
+        "Write in plain prose, second person to the user. Be specific and grounded in what "
+        "the data actually shows. Do not invent details not supported by the messages."
+    )
+    raw = _ollama_chat([{"role": "user", "content": prompt}], base_url, model, json_mode=False)
+    return raw or ""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML GENERATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1803,6 +1895,7 @@ def generate_html(
             "financial_requests": a["financial_requests"],
             "narrative_vs_record": ai_results.get("narrative_vs_record", {}).get(chat["contact_name"], []),
             "framework_suggestions": ai_results.get("framework_suggestions", {}).get(chat["contact_name"], []),
+            "relationship_summary": ai_results.get("relationship_summary", {}).get(chat["contact_name"], ""),
             "message_count": len(chat["messages"]),
             "emotion_summary": a["emotion_summary"],
             "coping_summary": a["coping_summary"],
@@ -2087,21 +2180,33 @@ function importNotes() {{
 function destroyChart(id) {{
   if(charts[id]) {{ charts[id].destroy(); delete charts[id]; }}
 }}
-function makeLineChart(canvasId, labels, datasets) {{
+function makeLineChart(canvasId, labels, datasets, isSentiment) {{
   destroyChart(canvasId);
   const ctx = document.getElementById(canvasId);
   if(!ctx) return;
+  const opts = {{
+    responsive:true,maintainAspectRatio:false,
+    plugins:{{legend:{{position:"top"}},tooltip:{{mode:"index"}}}},
+    scales:{{
+      x:{{ticks:{{maxTicksLimit:12,maxRotation:45}}}},
+      y:{{min:-1,max:1,ticks:{{stepSize:0.5}}}}
+    }}
+  }};
+  if(isSentiment) {{
+    opts.onClick = function(evt, elements) {{
+      if(!elements||!elements.length) return;
+      const idx = elements[0].index;
+      const label = labels[idx];
+      if(label) showMoodExplainer(canvasId, label);
+    }};
+    opts.onHover = function(evt) {{
+      evt.native.target.style.cursor = 'pointer';
+    }};
+  }}
   charts[canvasId] = new Chart(ctx,{{
     type:"line",
     data:{{labels,datasets}},
-    options:{{
-      responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{position:"top"}},tooltip:{{mode:"index"}}}},
-      scales:{{
-        x:{{ticks:{{maxTicksLimit:12,maxRotation:45}}}},
-        y:{{min:-1,max:1,ticks:{{stepSize:0.5}}}}
-      }}
-    }}
+    options:opts
   }});
 }}
 function makeBarChart(canvasId, labels, datasets, opts) {{
@@ -2183,6 +2288,8 @@ function getTabsForChat(chatId) {{
     {{id:"topics",label:"Topics Over Time",showAll:true,showSingle:true}},
     {{id:"network",label:"Relationship Network",showAll:true,showSingle:true}},
     {{id:"narrative",label:"Narrative vs Record",showAll:false,showSingle:true}},
+    {{id:"summary",label:"Relationship Summary",showAll:false,showSingle:true}},
+    {{id:"ask",label:"Ask AI",showAll:true,showSingle:true}},
   ];
   const isAll = chatId==="all";
   let tabs=base.filter(t=>isAll?t.showAll:t.showSingle);
@@ -2269,6 +2376,8 @@ function renderMain() {{
       case "network": renderNetwork(el); break;
       case "framework": renderFramework(el,chat); break;
       case "narrative": renderNarrative(el,chat); break;
+      case "summary": renderSummary(el,chat); break;
+      case "ask": renderAsk(el,chat.id); break;
       default: renderTimeline(el,chat);
     }}
   }}
@@ -2287,6 +2396,7 @@ function renderAllView(el) {{
     case "people": renderPeople(el); break;
     case "topics": renderTopics(el,CHATS); break;
     case "network": renderNetwork(el); break;
+    case "ask": renderAsk(el,"all"); break;
     default: renderConversationsPanel(el);
   }}
 }}
@@ -2564,6 +2674,15 @@ function renderSentimentChart(el, chats) {{
       data:{{labels:allDates,datasets:sentDatasets}},
       options:{{
         responsive:true,maintainAspectRatio:false,
+        onClick:function(evt,elements){{
+          if(!elements||!elements.length) return;
+          const idx=elements[0].index;
+          const label=allDates[idx];
+          if(label) showMoodExplainer("sentChart",label);
+        }},
+        onHover:function(evt){{
+          if(evt.native) evt.native.target.style.cursor='pointer';
+        }},
         plugins:{{
           legend:{{position:"top"}},
           tooltip:{{
@@ -2999,6 +3118,43 @@ function renderPeople(el) {{
   el.innerHTML=html;
 }}
 
+// ── LDA topic isolation helpers ──────────────────────────────────────────
+function toggleLdaTopic(cardEl, color) {{
+  const canvasId=cardEl.dataset.canvas;
+  const label=cardEl.dataset.label;
+  const chart=charts[canvasId];
+  if(!chart) return;
+  const cards=document.querySelectorAll(`[data-canvas="${{canvasId}}"]`);
+  const alreadyIsolated=Array.from(cards).some(c=>c.dataset.isolated==="1");
+  if(alreadyIsolated && cardEl.dataset.isolated==="1") {{
+    // click isolated card again → restore all
+    chart.data.datasets.forEach(d=>{{d.hidden=false;}});
+    cards.forEach(c=>{{c.dataset.isolated="";c.style.opacity="1";c.style.borderColor=c.dataset.color+"22";}});
+  }} else if(alreadyIsolated) {{
+    // click a different card → switch isolation
+    chart.data.datasets.forEach(d=>{{d.hidden=(d.label!==label);}});
+    cards.forEach(c=>{{
+      const active=c.dataset.label===label;
+      c.dataset.isolated=active?"1":"";
+      c.style.opacity=active?"1":"0.35";
+      c.style.borderColor=active?c.dataset.color:c.dataset.color+"22";
+    }});
+  }} else {{
+    // no isolation yet → isolate this card
+    chart.data.datasets.forEach(d=>{{d.hidden=(d.label!==label);}});
+    cards.forEach(c=>{{
+      const active=c.dataset.label===label;
+      c.dataset.isolated=active?"1":"";
+      c.style.opacity=active?"1":"0.35";
+      c.style.borderColor=active?c.dataset.color:c.dataset.color+"22";
+    }});
+  }}
+  chart.update();
+}}
+function ldaCardHoverOut(cardEl, color) {{
+  if(!cardEl.dataset.isolated) cardEl.style.borderColor=color+"22";
+}}
+
 // ── Topics Over Time ──────────────────────────────────────────────────────
 function renderTopics(el, chats) {{
   const TOPIC_COLORS=["#6366f1","#22c55e","#f97316","#3b82f6","#a855f7","#eab308","#ec4899","#14b8a6"];
@@ -3017,12 +3173,17 @@ function renderTopics(el, chats) {{
       const canvasId="ldaChart_"+chat.id;
       html+=`<div style="margin-bottom:24px">
         <div style="position:relative;height:200px"><canvas id="${{canvasId}}"></canvas></div>
-        <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px">`;
+        <p style="font-size:11px;color:var(--muted);margin:6px 0 8px;text-align:center">Click a topic card to isolate it · click again to restore all</p>
+        <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:8px" id="lda-cards-${{canvasId}}">`;
       const labels=Object.keys(lda.series);
       labels.forEach(function(label,i){{
         const words=(lda.topic_words||{{}})[label]||[];
-        html+=`<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:12px;flex:1;min-width:160px">
-          <div style="font-weight:600;color:${{TOPIC_COLORS[i%TOPIC_COLORS.length]}};margin-bottom:4px">${{esc(label)}}</div>
+        const color=TOPIC_COLORS[i%TOPIC_COLORS.length];
+        html+=`<div class="lda-topic-card" data-canvas="${{canvasId}}" data-label="${{esc(label)}}" data-color="${{color}}"
+          style="background:var(--bg);border:2px solid ${{color}}22;border-radius:var(--radius);padding:8px 12px;font-size:12px;flex:1;min-width:160px;cursor:pointer;transition:border-color .15s,opacity .15s"
+          onmouseenter="this.style.borderColor='${{color}}'" onmouseleave="ldaCardHoverOut(this,'${{color}}')"
+          onclick="toggleLdaTopic(this,'${{color}}')">
+          <div style="font-weight:600;color:${{color}};margin-bottom:4px">${{esc(label)}}</div>
           <div style="color:var(--muted)">${{words.slice(0,8).map(w=>`<span style="background:var(--surface);padding:1px 5px;border-radius:3px;margin:1px;display:inline-block">${{esc(w)}}</span>`).join("")}}</div>
         </div>`;
       }});
@@ -3170,6 +3331,123 @@ function renderNarrative(el, chat) {{
   el.innerHTML=html;
 }}
 
+// ── Relationship Summary ───────────────────────────────────────────────────
+function renderSummary(el, chat) {{
+  const text = chat.relationship_summary || "";
+  let html = `<div class="card"><h2>Relationship Summary — ${{esc(chat.name)}}</h2>`;
+  if(!text) {{
+    html += `<p class="no-data">No summary generated. Run with AI enabled to generate a relationship summary.</p>`;
+  }} else {{
+    // Render each paragraph
+    const paras = text.split(/\n+/).map(p => p.trim()).filter(Boolean);
+    paras.forEach(function(p) {{
+      html += `<p style="font-size:14px;line-height:1.75;margin-bottom:14px;color:var(--text)">${{esc(p)}}</p>`;
+    }});
+  }}
+  html += `</div>`;
+  el.innerHTML = html;
+}}
+
+// ── Chat Q&A ──────────────────────────────────────────────────────────────
+function renderAsk(el, chatId) {{
+  el.innerHTML = `<div class="card" id="ask-card">
+    <h2>Ask AI about this chat${{chatId==="all"?" (all conversations)":""}}</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px">
+      Ask anything about the messages — patterns, events, themes, or specific people mentioned.
+    </p>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input type="text" id="ask-input" placeholder="e.g. What topics come up when she is upset?" style="flex:1;padding:9px 12px;border:1.5px solid var(--border);border-radius:7px;font-size:14px;color:var(--text);background:var(--bg);outline:none" onkeydown="if(event.key==='Enter')askQuestion()">
+      <button onclick="askQuestion()" style="padding:9px 18px;border-radius:7px;border:none;background:var(--contact);color:#fff;font-size:14px;font-weight:600;cursor:pointer">Ask</button>
+    </div>
+    <div id="ask-history" style="margin-top:16px"></div>
+  </div>`;
+
+  // Store chatId on the card so askQuestion can read it
+  document.getElementById("ask-card").dataset.chatId = chatId;
+}}
+
+function askQuestion() {{
+  const card = document.getElementById("ask-card");
+  if(!card) return;
+  const chatId = card.dataset.chatId || currentChat;
+  const input = document.getElementById("ask-input");
+  const question = (input ? input.value : "").trim();
+  if(!question) return;
+  if(input) input.value = "";
+
+  const history = document.getElementById("ask-history");
+  if(!history) return;
+
+  // Append question bubble (right-aligned)
+  const qEl = document.createElement("div");
+  qEl.style.cssText = "display:flex;justify-content:flex-end;margin-bottom:8px";
+  qEl.innerHTML = `<div style="max-width:70%;background:var(--contact);color:#fff;padding:10px 14px;border-radius:18px;border-bottom-right-radius:4px;font-size:14px;line-height:1.5">${{esc(question)}}</div>`;
+  history.appendChild(qEl);
+
+  // Spinner
+  const aEl = document.createElement("div");
+  aEl.style.cssText = "display:flex;justify-content:flex-start;margin-bottom:16px";
+  aEl.innerHTML = `<div style="max-width:80%;background:var(--surface);border:1px solid var(--border);padding:10px 14px;border-radius:18px;border-bottom-left-radius:4px;font-size:14px;line-height:1.5;color:var(--muted)">Thinking&#8230;</div>`;
+  history.appendChild(aEl);
+  history.scrollTop = history.scrollHeight;
+
+  if(typeof pywebview === 'undefined' || !pywebview.api || !pywebview.api.chat_qa) {{
+    aEl.firstChild.style.color = "var(--danger)";
+    aEl.firstChild.textContent = "Chat Q&A is only available in the desktop app.";
+    return;
+  }}
+
+  pywebview.api.chat_qa(chatId, question).then(function(answer) {{
+    const paras = (answer||"No response").split(/\n+/).map(p=>p.trim()).filter(Boolean);
+    aEl.firstChild.style.color = "var(--text)";
+    aEl.firstChild.innerHTML = paras.map(p=>`<p style="margin:0 0 6px">${{esc(p)}}</p>`).join("");
+    history.scrollTop = history.scrollHeight;
+  }}).catch(function(err) {{
+    aEl.firstChild.style.color = "var(--danger)";
+    aEl.firstChild.textContent = "Error: " + String(err);
+  }});
+}}
+
+// ── Mood Explainer ────────────────────────────────────────────────────────
+function showMoodExplainer(canvasId, dateStr) {{
+  // Find or create the explainer card after the chart's parent card
+  const canvas = document.getElementById(canvasId);
+  if(!canvas) return;
+  const parentCard = canvas.closest(".card");
+  if(!parentCard) return;
+
+  let explainer = document.getElementById("mood-explainer-card");
+  if(!explainer) {{
+    explainer = document.createElement("div");
+    explainer.id = "mood-explainer-card";
+    explainer.className = "card";
+    explainer.style.cssText = "margin-top:0;border-top:none;border-top-left-radius:0;border-top-right-radius:0";
+    parentCard.insertAdjacentElement("afterend", explainer);
+  }}
+
+  explainer.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <span style="font-weight:600;font-size:14px">Explaining mood around ${{esc(dateStr)}} &#8230;</span>
+    <a href="#" onclick="document.getElementById('mood-explainer-card').remove();return false" style="font-size:13px;color:var(--muted)">&#215; Dismiss</a>
+  </div>
+  <div id="mood-explainer-body" style="font-size:14px;color:var(--muted);line-height:1.6">&#8987; Asking AI&#8230;</div>`;
+
+  if(typeof pywebview === 'undefined' || !pywebview.api || !pywebview.api.explain_period) {{
+    document.getElementById("mood-explainer-body").innerHTML = `<span style="color:var(--danger)">Mood Explainer is only available in the desktop app.</span>`;
+    return;
+  }}
+
+  pywebview.api.explain_period(currentChat, dateStr).then(function(answer) {{
+    const body = document.getElementById("mood-explainer-body");
+    if(!body) return;
+    const paras = (answer||"No response").split(/\n+/).map(p=>p.trim()).filter(Boolean);
+    body.style.color = "var(--text)";
+    body.innerHTML = paras.map(p=>`<p style="margin:0 0 8px">${{esc(p)}}</p>`).join("");
+  }}).catch(function(err) {{
+    const body = document.getElementById("mood-explainer-body");
+    if(body) {{ body.style.color="var(--danger)"; body.textContent="Error: "+String(err); }}
+  }});
+}}
+
 // ── Load notes from pywebview disk storage (desktop app only) ─────────────
 // In a browser, pywebview is undefined so this never fires.
 // In the desktop app, this syncs the disk notes.json into localStorage
@@ -3272,6 +3550,7 @@ def main():
         "cross_chat_links": [],
         "crisis_assessed": {},
         "coping_analysis": {},
+        "relationship_summary": {},
     }
 
     if use_ai:
@@ -3332,6 +3611,13 @@ def main():
             absa = run_absa(chat, base_url, model)
             absa_per_chat.append(absa)
         merge_absa_into_people(cross_chat["merged_people"], absa_per_chat)
+
+        # Call 9 — relationship summary (per chat)
+        for chat in chats:
+            print(f"[AI] Relationship summary for {chat['contact_name']}…")
+            ai_results["relationship_summary"][chat["contact_name"]] = ai_relationship_summary(
+                chat, base_url, model
+            )
 
     # ── Token log
     if args.log_tokens and TOKEN_LOG:
