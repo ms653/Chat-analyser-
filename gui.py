@@ -544,6 +544,27 @@ class AnalyserAPI:
                 base  = analyser.OLLAMA_BASE_URL
                 model = analyser.OLLAMA_MODEL
 
+                # Quick sanity-check: ping Ollama and confirm the model exists
+                _ollama_ok = False
+                try:
+                    import requests as _req
+                    _r = _req.get(f"{base}/api/tags", timeout=5)
+                    _models = [m["name"] for m in _r.json().get("models", [])]
+                    _base_names = [m.split(":")[0] for m in _models]
+                    if model in _models or model.split(":")[0] in _base_names:
+                        _ollama_ok = True
+                    else:
+                        self._log(
+                            f"⚠ Ollama is running but model '{model}' not found. "
+                            f"Available: {', '.join(_models)}. "
+                            f"Update the model name in Settings and re-run."
+                        )
+                except Exception as _e:
+                    self._log(f"⚠ Cannot reach Ollama at {base} — AI features skipped. ({_e})")
+
+                if not _ollama_ok:
+                    no_ai = True
+
                 self._log("AI ① People & sentiment cards…")
                 ai_results["people_cards"] = analyser.ai_people_cards(
                     cross_chat["merged_people"], base, model
