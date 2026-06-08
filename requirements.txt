@@ -8,12 +8,16 @@ requests>=2.31.0
 pywebview>=5.0.0
 
 # NLP — at least one required
-# Option A (recommended): HuggingFace transformers (better sentiment quality)
+# Option A (recommended): HuggingFace transformers — loads j-hartmann/emotion-english-distilroberta-base
+# for 7-category Ekman emotion classification (anger, disgust, fear, joy, neutral, sadness, surprise)
 transformers>=4.40.0
 torch>=2.0.0           # CPU-only is fine; or install torch separately per https://pytorch.org
 
 # Option B (lighter): TextBlob (set NLP_ENGINE = "textblob" in analyser.py)
 textblob>=0.18.0
+
+# Emoji sentiment scoring (used with Option A)
+emoji>=2.2.0
 
 # Optional — Claude API for crisis assessment
 # Only needed if CRISIS_AI_ASSESSMENT = True

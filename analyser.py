@@ -195,74 +195,166 @@ def _empty_chat(config: dict) -> dict:
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NLP — SENTIMENT SCORING
+# NLP — SENTIMENT SCORING (Ekman 7-emotion + emoji composite valence)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_sentiment_pipeline = None
+_EKMAN_LABELS = ["anger", "disgust", "fear", "joy", "neutral", "sadness", "surprise"]
+
+_EMOJI_LEXICON = {
+    "😭": -0.85, "😢": -0.80, "😤": -0.70, "🤬": -0.90, "🤢": -0.70,
+    "😨": -0.65, "😰": -0.60, "😞": -0.55, "😔": -0.50, "😒": -0.40,
+    "🙁": -0.35, "😕": -0.25, "😬": -0.20,
+    "🥰": 0.90,  "😍": 0.85, "😊": 0.80, "😄": 0.78, "😀": 0.75,
+    "😁": 0.72,  "🤗": 0.70, "👍": 0.65, "❤️": 0.88, "💕": 0.85,
+    "💪": 0.60,  "🎉": 0.75, "🥳": 0.80, "😂": 0.50, "🤣": 0.55,
+    "😮": 0.10,  "😲": 0.15, "😐": 0.00, "🤔": 0.05,
+}
 
 
-def _load_sentiment_pipeline():
-    global _sentiment_pipeline
-    if _sentiment_pipeline is not None:
-        return _sentiment_pipeline
-    try:
-        from transformers import pipeline
-        print("[INFO] Loading sentiment model (transformers)…")
-        _sentiment_pipeline = pipeline(
-            "sentiment-analysis",
-            model="distilbert-base-uncased-finetuned-sst-2-english",
-            truncation=True,
-            max_length=512,
+def _neutral_sentiment() -> dict:
+    return {
+        "label": "neutral", "score": 0.0,
+        "emotions": {e: 0.0 for e in _EKMAN_LABELS},
+        "composite_valence": 0.0,
+        "emoji_sentiment": 0.0,
+        "dominant_emotion": "neutral",
+    }
+
+
+class LocalAffectAggregator:
+    """
+    Ekman 7-emotion classifier with emoji-aware composite valence.
+    Uses j-hartmann/emotion-english-distilroberta-base locally.
+    Returns a sentiment dict that is backward-compatible (label + score fields preserved).
+    """
+
+    def __init__(self, pipeline_obj):
+        self._pipeline = pipeline_obj  # HuggingFace pipeline or None (textblob fallback)
+
+    def score(self, text: str) -> dict:
+        if not text or len(text.strip()) < 3:
+            return _neutral_sentiment()
+
+        # Strip emojis and score them separately
+        emoji_scores: list = []
+        clean_text = text
+        try:
+            import emoji as emoji_lib
+            clean_text = emoji_lib.replace_emoji(text, replace=" ").strip()
+            for ch in text:
+                if emoji_lib.is_emoji(ch):
+                    emoji_scores.append(_EMOJI_LEXICON.get(ch, 0.0))
+        except ImportError:
+            pass
+
+        # Emotion classification
+        emotions = {e: 0.0 for e in _EKMAN_LABELS}
+        if self._pipeline and len(clean_text.strip()) >= 3:
+            try:
+                raw = self._pipeline(clean_text[:512])
+                # return_all_scores=True returns [[{label, score}, ...]]
+                items = raw[0] if isinstance(raw[0], list) else raw
+                for item in items:
+                    lbl = item["label"].lower()
+                    if lbl in emotions:
+                        emotions[lbl] = round(item["score"], 4)
+            except Exception:
+                emotions["neutral"] = 1.0
+        elif not self._pipeline:
+            emotions["neutral"] = 1.0
+
+        dominant = max(emotions, key=emotions.get)
+        avg_emoji = sum(emoji_scores) / len(emoji_scores) if emoji_scores else 0.0
+
+        # Composite valence: joy raises it, sadness + anger lower it, emojis contribute 30 %
+        composite = round(
+            0.7 * (emotions["joy"] - emotions["sadness"] - 0.5 * emotions["anger"])
+            + 0.3 * avg_emoji,
+            4,
         )
-        print("[INFO] Sentiment model loaded.")
-    except Exception as e:
-        print(f"[WARN] Could not load transformers pipeline: {e}. Falling back to TextBlob.")
-        _sentiment_pipeline = "textblob"
-    return _sentiment_pipeline
+        composite = max(-1.0, min(1.0, composite))
 
-
-def score_sentiment_transformers(text: str, pipeline_obj) -> dict:
-    if len(text.strip()) < 3:
-        return {"label": "neutral", "score": 0.0}
-    try:
-        result = pipeline_obj(text[:512])[0]
-        label = result["label"].lower()  # POSITIVE / NEGATIVE
-        score = result["score"]
-        if label == "positive":
-            return {"label": "positive", "score": round(score, 4)}
-        else:
-            return {"label": "negative", "score": round(-score, 4)}
-    except Exception:
-        return {"label": "neutral", "score": 0.0}
-
-
-def score_sentiment_textblob(text: str) -> dict:
-    try:
-        from textblob import TextBlob
-        polarity = TextBlob(text).sentiment.polarity
-        if polarity > 0.05:
+        if composite > 0.1:
             label = "positive"
-        elif polarity < -0.05:
+        elif composite < -0.1:
             label = "negative"
         else:
             label = "neutral"
-        return {"label": label, "score": round(polarity, 4)}
+
+        return {
+            "label": label,
+            "score": composite,           # backward-compat alias for composite_valence
+            "emotions": emotions,
+            "composite_valence": composite,
+            "emoji_sentiment": round(avg_emoji, 4),
+            "dominant_emotion": dominant,
+        }
+
+
+_affect_aggregator: object = None
+
+
+def _load_affect_aggregator() -> LocalAffectAggregator:
+    global _affect_aggregator
+    if _affect_aggregator is not None:
+        return _affect_aggregator  # type: ignore[return-value]
+    try:
+        from transformers import pipeline as hf_pipeline
+        print("[INFO] Loading emotion model (j-hartmann/emotion-english-distilroberta-base)…")
+        pipe = hf_pipeline(
+            "text-classification",
+            model="j-hartmann/emotion-english-distilroberta-base",
+            return_all_scores=True,
+            truncation=True,
+            max_length=512,
+        )
+        print("[INFO] Emotion model loaded.")
+        _affect_aggregator = LocalAffectAggregator(pipe)
+    except Exception as e:
+        print(f"[WARN] Could not load emotion model: {e}. Falling back to TextBlob.")
+        _affect_aggregator = LocalAffectAggregator(None)
+    return _affect_aggregator  # type: ignore[return-value]
+
+
+def score_sentiment_textblob(text: str) -> dict:
+    """TextBlob fallback — maps polarity to a compatible Ekman-shaped dict."""
+    try:
+        from textblob import TextBlob
+        polarity = round(TextBlob(text).sentiment.polarity, 4)
+        joy = max(0.0, polarity)
+        sadness = max(0.0, -polarity)
+        neutral_score = round(1.0 - abs(polarity), 4)
+        if polarity > 0.05:
+            label, dominant = "positive", "joy"
+        elif polarity < -0.05:
+            label, dominant = "negative", "sadness"
+        else:
+            label, dominant = "neutral", "neutral"
+        return {
+            "label": label,
+            "score": polarity,
+            "emotions": {
+                "anger": 0.0, "disgust": 0.0, "fear": 0.0,
+                "joy": round(joy, 4), "neutral": neutral_score,
+                "sadness": round(sadness, 4), "surprise": 0.0,
+            },
+            "composite_valence": polarity,
+            "emoji_sentiment": 0.0,
+            "dominant_emotion": dominant,
+        }
     except Exception:
-        return {"label": "neutral", "score": 0.0}
+        return _neutral_sentiment()
 
 
 def add_sentiment_scores(chat: dict, engine: str = "transformers") -> None:
-    """Attach sentiment scores to every message in the chat."""
-    pipe = None
+    """Attach Ekman emotion scores and composite valence to every message."""
     if engine == "transformers":
-        pipe = _load_sentiment_pipeline()
-
-    for msg in chat["messages"]:
-        if pipe and pipe != "textblob":
-            s = score_sentiment_transformers(msg["text"], pipe)
-        else:
-            s = score_sentiment_textblob(msg["text"])
-        msg["sentiment"] = s
+        aggregator = _load_affect_aggregator()
+        for msg in chat["messages"]:
+            msg["sentiment"] = aggregator.score(msg["text"])
+    else:
+        for msg in chat["messages"]:
+            msg["sentiment"] = score_sentiment_textblob(msg["text"])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # INTENT CLASSIFICATION (rule-based)
@@ -503,6 +595,36 @@ def compute_daily_sentiment(chat: dict) -> dict:
     return {"user": user_series, "contact": contact_series}
 
 
+def compute_emotion_summary(chat: dict) -> dict:
+    """Average Ekman emotion distribution (%) per sender across all messages."""
+    user_totals = defaultdict(float)
+    contact_totals = defaultdict(float)
+    user_count = 0
+    contact_count = 0
+    for msg in chat["messages"]:
+        emo = msg.get("sentiment", {}).get("emotions")
+        if not emo:
+            continue
+        if msg["is_user"]:
+            for e in _EKMAN_LABELS:
+                user_totals[e] += emo.get(e, 0.0)
+            user_count += 1
+        else:
+            for e in _EKMAN_LABELS:
+                contact_totals[e] += emo.get(e, 0.0)
+            contact_count += 1
+
+    def avg_pct(totals, count):
+        if not count:
+            return {e: 0.0 for e in _EKMAN_LABELS}
+        return {e: round(totals[e] / count * 100, 1) for e in _EKMAN_LABELS}
+
+    return {
+        "user": avg_pct(user_totals, user_count),
+        "contact": avg_pct(contact_totals, contact_count),
+    }
+
+
 def compute_weekly_volume(chat: dict) -> dict:
     """Message count per ISO week per sender."""
     user_by_week: dict = defaultdict(int)
@@ -672,6 +794,7 @@ def run_per_chat_analysis(chat: dict, engine: str, custom_topics: list) -> None:
         "weekly_volume": compute_weekly_volume(chat),
         "topics": compute_topics(chat, custom_topics),
         "people": extract_person_mentions(chat),
+        "emotion_summary": compute_emotion_summary(chat),
         "distress_signals": [
             {"date": str(m["date"]), "text": m["text"][:300], "sender": m["sender"]}
             for m in chat["messages"] if "DISTRESS_SIGNAL" in m.get("intents", [])
@@ -1066,6 +1189,7 @@ def generate_html(
             "narrative_vs_record": ai_results.get("narrative_vs_record", {}).get(chat["contact_name"], []),
             "framework_suggestions": ai_results.get("framework_suggestions", {}).get(chat["contact_name"], []),
             "message_count": len(chat["messages"]),
+            "emotion_summary": a["emotion_summary"],
             "messages_for_timeline": [
                 {
                     "date": str(m["date"]),
@@ -1073,6 +1197,7 @@ def generate_html(
                     "is_user": m["is_user"],
                     "text": m["text"][:300],
                     "sentiment": m.get("sentiment", {}).get("label", "neutral"),
+                    "dominant_emotion": m.get("sentiment", {}).get("dominant_emotion", "neutral"),
                     "intents": [i for i in m.get("intents", []) if i not in ("INITIATED_BY_USER", "INITIATED_BY_CONTACT")],
                 }
                 for m in chat["messages"]
@@ -1236,6 +1361,11 @@ const PEOPLE = {_j(people_data)};
 const PEOPLE_AI = {_j(people_ai)};
 const TIMELINE_HIGHLIGHTS = {_j(ai_results.get("timeline_highlights", []))};
 const CROSS_CHAT_LINKS = {_j(ai_results.get("cross_chat_links", []))};
+const EMOTION_COLORS = {{
+  anger:"#ef4444",disgust:"#a855f7",fear:"#f97316",joy:"#22c55e",
+  neutral:"#9ca3af",sadness:"#3b82f6",surprise:"#eab308"
+}};
+const EMOTION_LABELS = ["anger","disgust","fear","joy","neutral","sadness","surprise"];
 const CRISIS_ASSESSED = {_j(ai_results.get("crisis_assessed", {}))};
 
 let currentChat = null;
@@ -1616,8 +1746,10 @@ function renderTimeline(el, chat) {{
       <div class="day-label">${{fmt(date)}}${{intentsToday.map(i=>badge(i)).join("")}}</div>`;
     dayMsgs.forEach(m=>{{
       const side=m.is_user?"user":"contact";
+      const emo=m.dominant_emotion&&m.dominant_emotion!=="neutral"?m.dominant_emotion:null;
+      const emoDot=emo?`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${{EMOTION_COLORS[emo]||"transparent"}};margin-left:5px;vertical-align:middle;opacity:.85" title="${{emo}}"></span>`:"";
       html+=`<div class="bubble ${{side}}">
-        <div class="bubble-inner">${{esc(m.text)}}</div>
+        <div class="bubble-inner">${{esc(m.text)}}${{emoDot}}</div>
       </div>`;
     }});
     html+=`<div class="note-section">
@@ -1932,6 +2064,48 @@ function renderSentimentChart(el, chats) {{
             x:{{ticks:{{maxTicksLimit:14,maxRotation:45}}}},
             y:{{min:-1,max:1,ticks:{{stepSize:0.5}},
               grid:{{color:function(ctx3){{return ctx3.tick.value===0?"#94a3b8":"#e2e8f0";}}}}}}}}}}}});
+    }});
+  }});
+
+  // ── Emotion breakdown ─────────────────────────────────────────────────────
+  chats.forEach(function(chat){{
+    const emoSum=chat.emotion_summary||{{}};
+    if(!emoSum.user&&!emoSum.contact) return;
+    var emoCard=document.createElement('div'); emoCard.className='card';
+    const canvasId="emoChart_"+chat.id;
+    emoCard.innerHTML=`<h2>Emotion breakdown${{chats.length>1?" — "+esc(chat.name):""}}</h2>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">
+        Average Ekman emotion distribution across all messages.
+        Each bar shows the percentage of messages where that emotion was dominant.
+      </p>
+      <div class="chart-wrap-sm"><canvas id="${{canvasId}}"></canvas></div>`;
+    el.appendChild(emoCard);
+    requestAnimationFrame(function(){{
+      destroyChart(canvasId);
+      const ctx=document.getElementById(canvasId); if(!ctx) return;
+      const userEmo=emoSum.user||{{}};
+      const contEmo=emoSum.contact||{{}};
+      charts[canvasId]=new Chart(ctx,{{
+        type:"bar",
+        data:{{
+          labels:["You",esc(chat.name)],
+          datasets:EMOTION_LABELS.map(function(e){{
+            return {{
+              label:e,
+              data:[userEmo[e]||0,contEmo[e]||0],
+              backgroundColor:(EMOTION_COLORS[e]||"#9ca3af")+"cc"
+            }};
+          }})
+        }},
+        options:{{
+          indexAxis:"y",responsive:true,maintainAspectRatio:false,
+          plugins:{{legend:{{position:"bottom",labels:{{boxWidth:12,font:{{size:11}}}}}}}},
+          scales:{{
+            x:{{stacked:true,max:100,ticks:{{callback:function(v){{return v+"%";}}}}}},
+            y:{{stacked:true}}
+          }}
+        }}
+      }});
     }});
   }});
 }}
