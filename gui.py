@@ -19,6 +19,11 @@ import webview
 # ── Path fix for PyInstaller bundle vs running from source ──────────────────
 if getattr(sys, "frozen", False):
     _BASE = sys._MEIPASS  # PyInstaller extracts here
+    # Windowed .app has no terminal — redirect stdout/stderr to a log file
+    # so print() calls don't raise BrokenPipeError and crash background threads
+    _log = open(Path.home() / ".whatsapp_analyser.log", "a", buffering=1)
+    sys.stdout = _log
+    sys.stderr = _log
 else:
     _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
@@ -350,7 +355,7 @@ class AnalyserAPI:
             # ── Patch analyser module globals from GUI config ────────────────
             analyser.PRIMARY_USER_NAME = config.get("primary_user", "")
             analyser.OLLAMA_BASE_URL   = config.get("ollama_url", "http://localhost:11434")
-            analyser.OLLAMA_MODEL      = config.get("ollama_model", "gemma3")
+            analyser.OLLAMA_MODEL      = config.get("ollama_model", "gemma4")
             analyser.ANTHROPIC_API_KEY = config.get("api_key", "")
 
             no_ai         = config.get("no_ai", False)
@@ -586,7 +591,7 @@ details[open] summary::before{transform:rotate(90deg)}
         </div>
         <div class="fld">
           <label for="ollamaModel">Model</label>
-          <input type="text" id="ollamaModel" value="gemma3">
+          <input type="text" id="ollamaModel" value="gemma4">
           <p class="hint">Run <code>ollama list</code> to see installed models</p>
         </div>
       </div>
@@ -779,7 +784,7 @@ function buildConfig() {
     chats,
     nlp_engine:    'transformers',
     ollama_url:    document.getElementById('ollamaUrl').value||'http://localhost:11434',
-    ollama_model:  document.getElementById('ollamaModel').value||'gemma3',
+    ollama_model:  document.getElementById('ollamaModel').value||'gemma4',
     no_ai:         document.getElementById('noAi').checked,
     claude_crisis: document.getElementById('claudeCrisis').checked,
     api_key:       document.getElementById('apiKey').value||'',

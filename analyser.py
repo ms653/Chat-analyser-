@@ -43,7 +43,7 @@ CHATS = [
 
 OUTPUT_FILE = "analysis.html"
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "gemma3"          # adjust to your installed model name
+OLLAMA_MODEL = "gemma4"          # adjust to your installed model name
 ANTHROPIC_API_KEY = ""           # optional — only for crisis assessment
 CRISIS_AI_ASSESSMENT = False     # set True to enable Claude API for crisis review
 NLP_ENGINE = "transformers"      # "transformers" or "textblob"
