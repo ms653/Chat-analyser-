@@ -317,6 +317,16 @@ DISTRESS_KW = [
 CRISIS_KW = [
     r"\b(don['']t want to (be here|live|exist|carry on)|better off (without me|dead)|ending it|not worth living|want to die|kill myself|suicide)\b",
     r"\b(took.{0,20}(pills|tablets)|hurt myself|self.harm)\b",
+    # self-harm
+    r"\b(cut(ting)? myself|been cutting|i['']ve cut|started cutting|cut(s)? (again|(my )?(arm|wrist|leg|skin)))\b",
+    r"\b(harm(ing)? myself|hurting myself|been hurting myself|hurt(ing)? my (arm|wrist|leg|skin))\b",
+    # suicidal ideation variants
+    r"\b(don['']t want to be here( any ?more)?|i just want to (disappear|not exist|be gone))\b",
+    r"\b(everyone.{0,40}better off without me|world.{0,30}better without me)\b",
+    r"\b(end(ing)? it all|end(ing)? (my life|everything|things))\b",
+    r"\b(no (reason|point|purpose) (to|in) (live|living|go(ing)? on|be(ing)? here))\b",
+    r"\b(think(ing)? (about|of) (suicide|killing myself|ending (it|my life)|not being here))\b",
+    r"\b(plan(ning)? to (hurt|harm|kill) myself)\b",
 ]
 
 FINANCIAL_KW = [
@@ -547,23 +557,46 @@ def compute_topics(chat: dict, custom_topics: list) -> dict:
     return {"counts": dict(topic_counts), "examples": dict(topic_examples)}
 
 
-def extract_person_mentions(chat: dict, min_count: int = 3) -> dict:
+def extract_person_mentions(chat: dict, min_count: int = 4) -> dict:
     """
     Extract names mentioned ≥ min_count times.
-    Heuristic: capitalised words that are not the known sender names or common words.
+    Heuristic: capitalised words that are not the known sender names, common words,
+    or words that also appear lowercase in the corpus (i.e. sentence-start artefacts).
     """
     known = {PRIMARY_USER_NAME.lower(), chat["contact_name"].lower()}
     known.update({n.split()[0].lower() for n in known if n})
 
-    STOP = {"i", "i'm", "i've", "i'll", "i'd", "me", "my", "we", "our", "she", "he",
-            "her", "his", "them", "they", "it", "that", "this", "what", "when",
-            "where", "how", "who", "why", "ok", "okay", "yes", "no", "hi", "hey",
-            "oh", "so", "just", "got", "get", "don", "doesn", "didn", "isn", "wasn",
-            "aren", "haven", "hadn", "wouldn", "couldn", "shouldn", "let", "going",
-            "think", "know", "really", "well", "good", "great", "fine",
-            "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-            "january", "february", "march", "april", "may", "june", "july",
-            "august", "september", "october", "november", "december"}
+    STOP = {
+        # pronouns / determiners
+        "i", "i'm", "i've", "i'll", "i'd", "me", "my", "we", "our", "she", "he",
+        "her", "his", "them", "they", "it", "that", "this", "what", "when",
+        "where", "how", "who", "why",
+        # discourse / affirmations
+        "ok", "okay", "yes", "no", "hi", "hey", "oh", "so", "just", "got", "get",
+        "don", "doesn", "didn", "isn", "wasn", "aren", "haven", "hadn", "wouldn",
+        "couldn", "shouldn", "let", "going", "think", "know", "really", "well",
+        "good", "great", "fine", "nice", "yeah", "yep", "nope", "right", "sure",
+        # common emotional/social words that get capitalised mid-message
+        "love", "dear", "thanks", "thank", "sorry", "hope", "happy", "sad",
+        "god", "lord", "jesus", "christ", "bless",
+        # seasonal / cultural nouns
+        "xmas", "christmas", "easter", "halloween", "thanksgiving",
+        # app/tech nouns
+        "app", "phone", "message", "text", "chat", "call", "email", "whatsapp",
+        # place-ish common nouns
+        "home", "house", "road", "street", "town", "hospital", "doctor",
+        # days / months
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        "january", "february", "march", "april", "may", "june", "july",
+        "august", "september", "october", "november", "december",
+    }
+
+    # Words that appear in lowercase anywhere in the corpus are ordinary words
+    # that happen to be capitalised at sentence starts — not proper nouns.
+    lowercase_corpus: set = set()
+    for msg in chat["messages"]:
+        for w in re.findall(r"\b[a-z]{3,}\b", msg["text"]):
+            lowercase_corpus.add(w)
 
     name_counter = Counter()
     name_messages = defaultdict(list)
@@ -572,7 +605,7 @@ def extract_person_mentions(chat: dict, min_count: int = 3) -> dict:
         words = re.findall(r"\b[A-Z][a-z]{2,}\b", msg["text"])
         for w in words:
             wl = w.lower()
-            if wl not in known and wl not in STOP:
+            if wl not in known and wl not in STOP and wl not in lowercase_corpus:
                 name_counter[w] += 1
                 if len(name_messages[w]) < 8:
                     name_messages[w].append({
@@ -601,6 +634,28 @@ def extract_person_mentions(chat: dict, min_count: int = 3) -> dict:
     return people
 
 
+def _build_crisis_flags_with_context(messages: list) -> list:
+    """Build crisis flag records including surrounding message context."""
+    flags = []
+    for i, m in enumerate(messages):
+        if "CRISIS_FLAG" not in m.get("intents", []):
+            continue
+        flags.append({
+            "date": str(m["date"]),
+            "text": m["text"][:300],
+            "sender": m["sender"],
+            "context_before": [
+                {"sender": messages[j]["sender"], "text": messages[j]["text"][:200]}
+                for j in range(max(0, i - 3), i)
+            ],
+            "context_after": [
+                {"sender": messages[j]["sender"], "text": messages[j]["text"][:200]}
+                for j in range(i + 1, min(len(messages), i + 3))
+            ],
+        })
+    return flags
+
+
 def run_per_chat_analysis(chat: dict, engine: str, custom_topics: list) -> None:
     """Run all per-chat Python analysis, attaching results to the chat dict."""
     print(f"[INFO] Analysing chat: {chat['contact_name']}")
@@ -621,10 +676,7 @@ def run_per_chat_analysis(chat: dict, engine: str, custom_topics: list) -> None:
             {"date": str(m["date"]), "text": m["text"][:300], "sender": m["sender"]}
             for m in chat["messages"] if "DISTRESS_SIGNAL" in m.get("intents", [])
         ],
-        "crisis_flags": [
-            {"date": str(m["date"]), "text": m["text"][:300]}
-            for m in chat["messages"] if "CRISIS_FLAG" in m.get("intents", [])
-        ],
+        "crisis_flags": _build_crisis_flags_with_context(chat["messages"]),
         "financial_requests": [
             {"date": str(m["date"]), "text": m["text"][:300], "sender": m["sender"]}
             for m in chat["messages"] if "FINANCIAL_REQUEST" in m.get("intents", [])
@@ -874,8 +926,42 @@ def ai_cross_chat_links(cross_chat: dict, chats: list, base_url: str, model: str
     return _parse_json_response(raw, [])
 
 
+def _format_flag_for_llm(flag: dict, anonymise: bool = False) -> str:
+    """Format a crisis flag with surrounding context for an LLM prompt."""
+    sender_map: dict = {}
+
+    def label(sender: str) -> str:
+        if not anonymise:
+            return sender
+        if sender not in sender_map:
+            sender_map[sender] = f"Person {chr(65 + len(sender_map))}"
+        return sender_map[sender]
+
+    lines = []
+    for m in flag.get("context_before", []):
+        lines.append(f"  [{label(m['sender'])}]: {m['text']}")
+    lines.append(f">>> [{label(flag.get('sender', '?'))}]: {flag['text']} <<<")
+    for m in flag.get("context_after", []):
+        lines.append(f"  [{label(m['sender'])}]: {m['text']}")
+    return "\n".join(lines)
+
+
+_CRISIS_PROMPT_INSTRUCTIONS = (
+    "You are reviewing messages flagged for potential crisis language. "
+    "For each flagged message (marked >>>), read it alongside its surrounding context. "
+    "Assess whether it represents genuine distress or risk, rhetorical/emotional expression "
+    "(e.g. sarcasm, hyperbole), or is unclear. "
+    "Consider: directness of language, repetition of similar themes across the excerpt, "
+    "and whether context suggests escalation or past behaviour. "
+    "Return ONLY a JSON array — no prose, no markdown — with one object per message:\n"
+    "[{\"excerpt_id\": N, \"assessment\": \"1-2 sentence plain assessment\", "
+    "\"confidence\": \"high|medium|low\", \"is_literal_risk\": true|false}]\n"
+    "Do not reproduce harmful method information."
+)
+
+
 def ai_crisis_assessment_claude(crisis_flags: list, api_key: str) -> list:
-    """Call 6 — Claude API crisis assessment (optional)."""
+    """Call 6 — Claude API crisis assessment with context (optional)."""
     if not crisis_flags or not api_key:
         return []
     try:
@@ -884,18 +970,15 @@ def ai_crisis_assessment_claude(crisis_flags: list, api_key: str) -> list:
         print("[WARN] anthropic package not installed. Skipping crisis assessment.", file=sys.stderr)
         return []
     client = anthropic.Anthropic(api_key=api_key)
-    excerpts = [{"id": i, "text": f["text"]} for i, f in enumerate(crisis_flags)]
-    prompt = (
-        "These messages have been flagged as potentially containing crisis language. "
-        "For each, assess whether this appears to be genuine distress, rhetorical/emotional expression, "
-        "or unclear. Return as JSON array: [{\"excerpt_id\": N, \"assessment\": \"...\", \"confidence\": \"high|medium|low\"}]. "
-        "Do not include method or means information.\n\n"
-        f"Excerpts:\n{json.dumps(excerpts)}"
-    )
+    formatted = [
+        {"id": i, "context": _format_flag_for_llm(f, anonymise=True)}
+        for i, f in enumerate(crisis_flags)
+    ]
+    prompt = f"{_CRISIS_PROMPT_INSTRUCTIONS}\n\nFlagged messages:\n{json.dumps(formatted)}"
     try:
         response = client.messages.create(
             model="claude-opus-4-8",
-            max_tokens=1024,
+            max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text
@@ -903,6 +986,31 @@ def ai_crisis_assessment_claude(crisis_flags: list, api_key: str) -> list:
     except Exception as e:
         print(f"[WARN] Claude API call failed: {e}", file=sys.stderr)
         return []
+
+
+def ai_crisis_assessment_ollama(crisis_flags: list, base_url: str, model: str) -> list:
+    """Local Gemma crisis assessment via Ollama — runs automatically when AI is enabled."""
+    if not crisis_flags:
+        return []
+    results = []
+    for i, flag in enumerate(crisis_flags):
+        context_block = _format_flag_for_llm(flag, anonymise=False)
+        prompt = (
+            f"{_CRISIS_PROMPT_INSTRUCTIONS}\n\n"
+            f"There is 1 flagged message (excerpt_id 0):\n{context_block}"
+        )
+        raw = _ollama_chat([{"role": "user", "content": prompt}], base_url, model)
+        parsed = _parse_json_response(raw, None)
+        # Ollama may return a single object or a list with one item
+        if isinstance(parsed, list) and parsed:
+            item = parsed[0]
+        elif isinstance(parsed, dict):
+            item = parsed
+        else:
+            item = {"assessment": "Could not assess.", "confidence": "low", "is_literal_risk": False}
+        item["excerpt_id"] = i
+        results.append(item)
+    return results
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML GENERATION
@@ -1867,8 +1975,10 @@ function renderCrisisContent(el, chats) {{
     if(chats.length>1) html+=`<h3 style="margin-bottom:8px">${{esc(chat.name)}}</h3>`;
     chat.crisis_flags.forEach((f,i)=>{{
       const assessed=CRISIS_ASSESSED[chat.name]?.[i];
+      const literalBadge=assessed&&assessed.is_literal_risk===true
+        ?`<span style="background:#fee2e2;color:#991b1b;font-size:11px;padding:2px 6px;border-radius:3px;margin-left:6px;font-weight:600">confirmed risk</span>`:"";
       html+=`<div style="border:1px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:10px">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${{fmt(f.date)}}</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${{fmt(f.date)}}${{f.sender?` · <b>${{esc(f.sender)}}</b>`:""}}${{literalBadge}}</div>
         <div style="font-size:13px">${{esc(f.text)}}</div>
         ${{assessed?`<div style="margin-top:8px;font-size:12px;background:var(--bg);padding:8px;border-radius:4px">
           <b>AI assessment:</b> ${{esc(assessed.assessment)}} (${{esc(assessed.confidence)}} confidence)
@@ -1907,7 +2017,11 @@ function renderSupport(el, chats) {{
 
 // ── People ─────────────────────────────────────────────────────────────────
 function renderPeople(el) {{
-  const names=Object.keys(PEOPLE);
+  let names=Object.keys(PEOPLE);
+  if(currentChat&&currentChat!=="all") {{
+    const chat=getChatById(currentChat);
+    if(chat) names=names.filter(n=>PEOPLE[n].chats&&PEOPLE[n].chats.includes(chat.name));
+  }}
   if(!names.length) {{ el.innerHTML=`<p class="no-data">No recurring names detected (3+ mentions required).</p>`; return; }}
   let html=`<div class="card"><h2>People & Sentiment</h2>
     <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Cards are editable — your changes are saved in your browser.</p>`;
@@ -2120,15 +2234,21 @@ def main():
             print("[AI] Cross-chat link analysis…")
             ai_results["cross_chat_links"] = ai_cross_chat_links(cross_chat, chats, base_url, model)
 
-        # Call 6 — crisis assessment (Claude, optional)
-        if use_claude_crisis:
-            print("[AI] Crisis assessment (Claude API)…")
-            for chat in chats:
-                if chat["analytics"]["crisis_flags"]:
-                    assessed = ai_crisis_assessment_claude(chat["analytics"]["crisis_flags"], api_key)
-                    ai_results["crisis_assessed"][chat["contact_name"]] = {
-                        i: item for i, item in enumerate(assessed)
-                    }
+        # Call 6 — crisis assessment (Claude if configured, otherwise local Ollama)
+        for chat in chats:
+            if not chat["analytics"]["crisis_flags"]:
+                continue
+            if use_claude_crisis:
+                print(f"[AI] Crisis assessment via Claude for {chat['contact_name']}…")
+                assessed = ai_crisis_assessment_claude(chat["analytics"]["crisis_flags"], api_key)
+            else:
+                print(f"[AI] Crisis assessment via Ollama for {chat['contact_name']}…")
+                assessed = ai_crisis_assessment_ollama(
+                    chat["analytics"]["crisis_flags"], base_url, model
+                )
+            ai_results["crisis_assessed"][chat["contact_name"]] = {
+                i: item for i, item in enumerate(assessed)
+            }
 
     # ── Token log
     if args.log_tokens and TOKEN_LOG:
